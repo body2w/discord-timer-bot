@@ -74,6 +74,38 @@ const command = new SlashCommandBuilder()
       .setDescription("Reset all active timers and pomodoros (owner only)")
   )
   .addSubcommand((sub) =>
+    sub
+      .setName("add")
+      .setDescription(
+        "Add a participant to a running timer or pomodoro (provide id to target a specific session)"
+      )
+      .addStringOption((opt) =>
+        opt
+          .setName("id")
+          .setDescription("Timer or pomodoro ID")
+          .setRequired(false)
+      )
+      .addUserOption((opt) =>
+        opt.setName("user").setDescription("User to add").setRequired(true)
+      )
+  )
+  .addSubcommand((sub) =>
+    sub
+      .setName("remove")
+      .setDescription(
+        "Remove a participant from a running timer or pomodoro (provide id to target a specific session)"
+      )
+      .addStringOption((opt) =>
+        opt
+          .setName("id")
+          .setDescription("Timer or pomodoro ID")
+          .setRequired(false)
+      )
+      .addUserOption((opt) =>
+        opt.setName("user").setDescription("User to remove").setRequired(true)
+      )
+  )
+  .addSubcommand((sub) =>
     sub.setName("help").setDescription("Show usage help for /timer")
   )
   .addSubcommandGroup((group) =>

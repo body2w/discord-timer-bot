@@ -339,6 +339,166 @@ function parseParticipants(input) {
   return _parseParticipants(input);
 }
 
+// Add/remove participant helpers
+async function addParticipantTo(id, userId, actorId) {
+  // If id provided, find a timer or pomodoro by that id; otherwise, try to find
+  // an active timer or pomodoro owned by actorId
+  let targetTimer = null;
+  let targetPomo = null;
+  if (id) {
+    if (timers.has(id)) targetTimer = timers.get(id);
+    if (pomodoros.has(id)) targetPomo = pomodoros.get(id);
+  } else {
+    targetTimer = [...timers.values()].find((t) => t.userId === actorId);
+    targetPomo = [...pomodoros.values()].find((p) => p.userId === actorId);
+  }
+
+  if (!targetTimer && !targetPomo)
+    throw new Error("No active timer or pomodoro found to add participant to.");
+
+  if (targetTimer) {
+    if (!targetTimer.participants)
+      targetTimer.participants = new Set([targetTimer.userId]);
+    targetTimer.participants.add(userId);
+
+    // Notify channel and try to edit the original message to reflect new participants
+    try {
+      const channel = await getChannel(targetTimer.channelId);
+      const participantsText = [...targetTimer.participants]
+        .map((id) => `<@${id}>`)
+        .join(" ");
+      const notif = `✅ <@${userId}> added to timer ${id} by <@${actorId}> • Participants: ${participantsText}`;
+      if (channel && channel.isTextBased && canSendInChannel(channel)) {
+        if (targetTimer.messageId) {
+          const msg = await channel.messages
+            .fetch(targetTimer.messageId)
+            .catch(() => null);
+          if (msg && msg.content) {
+            // replace existing Participants section if present
+            const newContent =
+              msg.content.replace(/\s*• Participants:.*$/s, "") +
+              ` • Participants: ${participantsText}`;
+            try {
+              await msg.edit({
+                content: newContent,
+                components: msg?.components || [],
+              });
+            } catch (err) {
+              const sent = await channel.send(notif).catch(() => null);
+              if (sent && sent.id) targetTimer.messageId = sent.id;
+            }
+          } else {
+            const sent = await channel.send(notif).catch(() => null);
+            if (sent && sent.id) targetTimer.messageId = sent.id;
+          }
+        } else {
+          const sent = await channel.send(notif).catch(() => null);
+          if (sent && sent.id) targetTimer.messageId = sent.id;
+        }
+      }
+    } catch (err) {
+      // swallow; we'll persist below
+    }
+
+    await persist();
+    return { type: "timer", id, userId };
+  }
+
+  if (targetPomo) {
+    if (!targetPomo.participants)
+      targetPomo.participants = new Set([targetPomo.userId]);
+    targetPomo.participants.add(userId);
+
+    try {
+      const channel = await getChannel(targetPomo.channelId);
+      const notif = `✅ <@${userId}> added to pomodoro ${id} by <@${actorId}>`;
+      if (channel && channel.isTextBased && canSendInChannel(channel)) {
+        const sent = await channel.send(notif).catch(() => null);
+        if (sent && sent.id) targetPomo.messageId = sent.id;
+      }
+      // Refresh main status message to include new participant mentions
+      await updatePomodoroMessage(id).catch(() => null);
+    } catch (err) {
+      // swallow
+    }
+
+    await persist();
+    return { type: "pomodoro", id, userId };
+  }
+}
+
+async function removeParticipantFrom(id, userId, actorId) {
+  let targetTimer = null;
+  let targetPomo = null;
+  if (id) {
+    if (timers.has(id)) targetTimer = timers.get(id);
+    if (pomodoros.has(id)) targetPomo = pomodoros.get(id);
+  } else {
+    targetTimer = [...timers.values()].find((t) => t.userId === actorId);
+    targetPomo = [...pomodoros.values()].find((p) => p.userId === actorId);
+  }
+
+  if (!targetTimer && !targetPomo)
+    throw new Error(
+      "No active timer or pomodoro found to remove participant from."
+    );
+
+  if (targetTimer) {
+    if (!targetTimer.participants)
+      targetTimer.participants = new Set([targetTimer.userId]);
+    targetTimer.participants.delete(userId);
+    try {
+      const channel = await getChannel(targetTimer.channelId);
+      const participantsText = [...targetTimer.participants]
+        .map((id) => `<@${id}>`)
+        .join(" ");
+      const notif = `✅ <@${userId}> removed from timer ${id} by <@${actorId}>`;
+      if (channel && channel.isTextBased && canSendInChannel(channel)) {
+        if (targetTimer.messageId) {
+          const msg = await channel.messages
+            .fetch(targetTimer.messageId)
+            .catch(() => null);
+          if (msg && msg.content) {
+            const newContent =
+              msg.content.replace(/\s*• Participants:.*$/s, "") +
+              (participantsText ? ` • Participants: ${participantsText}` : "");
+            try {
+              await msg.edit({
+                content: newContent,
+                components: msg?.components || [],
+              });
+            } catch (err) {
+              await channel.send(notif).catch(() => null);
+            }
+          } else {
+            await channel.send(notif).catch(() => null);
+          }
+        } else {
+          await channel.send(notif).catch(() => null);
+        }
+      }
+    } catch (err) {}
+    await persist();
+    return { type: "timer", id, userId };
+  }
+
+  if (targetPomo) {
+    if (!targetPomo.participants)
+      targetPomo.participants = new Set([targetPomo.userId]);
+    targetPomo.participants.delete(userId);
+    try {
+      const channel = await getChannel(targetPomo.channelId);
+      const notif = `✅ <@${userId}> removed from pomodoro ${id} by <@${actorId}>`;
+      if (channel && channel.isTextBased && canSendInChannel(channel)) {
+        await channel.send(notif).catch(() => null);
+      }
+      await updatePomodoroMessage(id).catch(() => null);
+    } catch (err) {}
+    await persist();
+    return { type: "pomodoro", id, userId };
+  }
+}
+
 async function handlePomodoroTick(id) {
   const p = pomodoros.get(id);
   if (!p) return;
@@ -1028,7 +1188,7 @@ client.on("interactionCreate", async (interaction) => {
   }
 
   if (group === "pomodoro") {
-    const ps = sub; // start|stop|status
+    const ps = sub; // start|stop|status|participants
     if (ps === "start") {
       const workStr = interaction.options.getString("work") || "25m";
       const breakStr = interaction.options.getString("break") || "5m";
@@ -1536,6 +1696,52 @@ client.on("interactionCreate", async (interaction) => {
     return safeReply(interaction, `🛑 Timer ${id} canceled`);
   }
 
+  // Add a participant to a running timer or pomodoro
+  if (sub === "add") {
+    const id = interaction.options.getString("id");
+    const u = interaction.options.getUser("user");
+    if (!u)
+      return safeReply(interaction, {
+        content: "❌ Please provide a valid user.",
+        flags: EPHEMERAL,
+      });
+    try {
+      await addParticipantTo(id, u.id, interaction.user.id);
+      return safeReply(interaction, {
+        content: `✅ Added <@${u.id}> to ${id || "your active session"}.`,
+        flags: EPHEMERAL,
+      });
+    } catch (err) {
+      return safeReply(interaction, {
+        content: `❌ Could not add participant: ${err.message}`,
+        flags: EPHEMERAL,
+      });
+    }
+  }
+
+  // Remove a participant from a running timer or pomodoro
+  if (sub === "remove") {
+    const id = interaction.options.getString("id");
+    const u = interaction.options.getUser("user");
+    if (!u)
+      return safeReply(interaction, {
+        content: "❌ Please provide a valid user.",
+        flags: EPHEMERAL,
+      });
+    try {
+      await removeParticipantFrom(id, u.id, interaction.user.id);
+      return safeReply(interaction, {
+        content: `✅ Removed <@${u.id}> from ${id || "your active session"}.`,
+        flags: EPHEMERAL,
+      });
+    } catch (err) {
+      return safeReply(interaction, {
+        content: `❌ Could not remove participant: ${err.message}`,
+        flags: EPHEMERAL,
+      });
+    }
+  }
+
   if (sub === "list") {
     const isOwner = OWNER_ID && interaction.user.id === OWNER_ID;
     const isAuthorized =
@@ -1782,6 +1988,13 @@ client.on("interactionCreate", async (interaction) => {
 });
 
 // Export small helpers for testing
-export { sendNotification, client };
+export {
+  sendNotification,
+  client,
+  addParticipantTo,
+  removeParticipantFrom,
+  pomodoros,
+  timers,
+};
 
 client.login(process.env.TOKEN);
