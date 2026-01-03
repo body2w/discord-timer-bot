@@ -113,7 +113,10 @@ async function sendNotification({
           } catch (err) {
             // If editing the original message fails (e.g., message deleted or stale
             // permissions), attempt to send a new message instead of giving up.
-            console.warn(`Edit failed for ${messageId} in ${channelId}, sending new message:`, err);
+            console.warn(
+              `Edit failed for ${messageId} in ${channelId}, sending new message:`,
+              err
+            );
             try {
               await channel.send({ content, components });
               return { channel: true, dm: false };
@@ -489,22 +492,24 @@ async function handlePomodoroTick(id) {
             ? [...p.participants].map((id) => `<@${id}>`).join(" ")
             : `<@${p.userId}>`;
           const workContent = `🟢 ${labelPrefix}Cycle ${cycle}/${
-                p.totalCycles
-              } — Work started (${formatDuration(
-                p.workDuration
-              )}) • Cycle time left: ${formatDuration(
-                cycleRemaining
-              )} • Total time left: ${formatDuration(totalRemaining)}${
-                participantsText ? ` • Participants: ${participantsText}` : ""
-              }`;
+            p.totalCycles
+          } — Work started (${formatDuration(
+            p.workDuration
+          )}) • Cycle time left: ${formatDuration(
+            cycleRemaining
+          )} • Total time left: ${formatDuration(totalRemaining)}${
+            participantsText ? ` • Participants: ${participantsText}` : ""
+          }`;
           if (msg) {
             try {
-              await msg.edit({ content: workContent, components: msg?.components });
+              await msg.edit({
+                content: workContent,
+                components: msg?.components,
+              });
             } catch (err) {
               await channel.send(workContent).catch(() => null);
             }
-          } else
-            await channel.send(workContent).catch(() => null);
+          } else await channel.send(workContent).catch(() => null);
         } else {
           // Channel unavailable — do not send DMs for pomodoro events per configuration
           console.warn(
@@ -851,7 +856,9 @@ client.on("interactionCreate", async (interaction) => {
                 components: [],
               });
             } catch (err) {
-              await channel.send(`🛑 Timer ${id} canceled by <@${interaction.user.id}>`).catch(() => null);
+              await channel
+                .send(`🛑 Timer ${id} canceled by <@${interaction.user.id}>`)
+                .catch(() => null);
             }
           }
         }
@@ -910,7 +917,9 @@ client.on("interactionCreate", async (interaction) => {
                 components: [],
               });
             } catch (err) {
-              await channel.send(`🛑 Pomodoro ${id} stopped by <@${interaction.user.id}>`).catch(() => null);
+              await channel
+                .send(`🛑 Pomodoro ${id} stopped by <@${interaction.user.id}>`)
+                .catch(() => null);
             }
           }
         }
@@ -1193,9 +1202,14 @@ client.on("interactionCreate", async (interaction) => {
             .catch(() => null);
           if (msg) {
             try {
-              await msg.edit({ content: `🛑 Pomodoro stopped by <@${interaction.user.id}>`, components: [] });
+              await msg.edit({
+                content: `🛑 Pomodoro stopped by <@${interaction.user.id}>`,
+                components: [],
+              });
             } catch (err) {
-              await channel.send(`🛑 Pomodoro stopped by <@${interaction.user.id}>`).catch(() => null);
+              await channel
+                .send(`🛑 Pomodoro stopped by <@${interaction.user.id}>`)
+                .catch(() => null);
             }
           }
         }
@@ -1593,9 +1607,14 @@ client.on("interactionCreate", async (interaction) => {
               .catch(() => null);
             if (msg) {
               try {
-                await msg.edit({ content: `🧹 Timer ${id} reset by <@${interaction.user.id}>`, components: [] });
+                await msg.edit({
+                  content: `🧹 Timer ${id} reset by <@${interaction.user.id}>`,
+                  components: [],
+                });
               } catch (err) {
-                await channel.send(`🧹 Timer ${id} reset by <@${interaction.user.id}>`).catch(() => null);
+                await channel
+                  .send(`🧹 Timer ${id} reset by <@${interaction.user.id}>`)
+                  .catch(() => null);
               }
             }
           }
@@ -1638,9 +1657,14 @@ client.on("interactionCreate", async (interaction) => {
               .catch(() => null);
             if (msg) {
               try {
-                await msg.edit({ content: `🧹 Pomodoro ${id} reset by <@${interaction.user.id}>`, components: [] });
+                await msg.edit({
+                  content: `🧹 Pomodoro ${id} reset by <@${interaction.user.id}>`,
+                  components: [],
+                });
               } catch (err) {
-                await channel.send(`🧹 Pomodoro ${id} reset by <@${interaction.user.id}>`).catch(() => null);
+                await channel
+                  .send(`🧹 Pomodoro ${id} reset by <@${interaction.user.id}>`)
+                  .catch(() => null);
               }
             }
           }
@@ -1728,11 +1752,6 @@ client.on("interactionCreate", async (interaction) => {
     const entries = [...agg.entries()];
     entries.sort((a, b) => b[1] - a[1]);
     const top = entries.slice(0, 10);
-  }
-}
-
-// Export small helpers for testing
-export { sendNotification, client };
 
     const lines = await Promise.all(
       top.map(async ([uid, ms]) => {
@@ -1752,5 +1771,8 @@ export { sendNotification, client };
     );
   }
 });
+
+// Export small helpers for testing
+export { sendNotification, client };
 
 client.login(process.env.TOKEN);
