@@ -1,3 +1,5 @@
 .vercel
 node_modules
 .env
+# Runtime/persistent state (do not commit)
+timers-data.json

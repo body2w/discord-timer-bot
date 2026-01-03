@@ -54,3 +54,18 @@ export function parseTime(input) {
     ? value * 86400000
     : null;
 }
+
+export function parseParticipants(input) {
+  if (!input || typeof input !== "string") return [];
+  const ids = new Set();
+  // Match mention formats: <@123...> or <@!123...>
+  const re = /<@!?(\d+)>/g;
+  let m;
+  while ((m = re.exec(input))) ids.add(m[1]);
+  // Also accept plain IDs separated by spaces/commas
+  const tokens = input.split(/[\s,]+/).map((t) => t.trim());
+  for (const t of tokens) {
+    if (/^\d+$/.test(t)) ids.add(t);
+  }
+  return [...ids];
+}

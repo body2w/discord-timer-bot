@@ -61,6 +61,12 @@ const command = new SlashCommandBuilder()
             { name: "week", value: "week" }
           )
       )
+      .addBooleanOption((opt) =>
+        opt
+          .setName("global")
+          .setDescription("Show global leaderboard instead of just your total")
+          .setRequired(false)
+      )
   )
   .addSubcommand((sub) =>
     sub
@@ -149,6 +155,14 @@ const command = new SlashCommandBuilder()
               )
               .setRequired(false)
           )
+          .addStringOption((opt) =>
+            opt
+              .setName("participants")
+              .setDescription(
+                "Mentions of users participating in work sessions (e.g., @alice @bob)"
+              )
+              .setRequired(false)
+          )
       )
       .addSubcommand((sub) =>
         sub
@@ -159,6 +173,16 @@ const command = new SlashCommandBuilder()
               .setName("id")
               .setDescription("Pomodoro ID to stop")
               .setRequired(false)
+          )
+      )
+      .addSubcommand((sub) =>
+        sub
+          .setName("participants")
+          .setDescription(
+            "Show participants for an active pomodoro (or provide id)"
+          )
+          .addStringOption((opt) =>
+            opt.setName("id").setDescription("Pomodoro ID").setRequired(false)
           )
       )
       .addSubcommand((sub) =>

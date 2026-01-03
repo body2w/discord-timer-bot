@@ -1,5 +1,8 @@
 import assert from "assert";
 import { parseTime, formatDuration } from "../utils.js";
+import "./pomodoro-participants.test.js";
+import "./parse-participants.test.js";
+import "./storage-allowedResetters.test.js";
 
 console.log("Running tests...");
 

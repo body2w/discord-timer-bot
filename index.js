@@ -222,6 +222,7 @@ async function persist() {
       label: p.label || null,
       allowDM: !!p.allowDM,
       broadcast: !!p.broadcast,
+      participants: p.participants ? [...p.participants] : [],
     };
   }
 
@@ -261,6 +262,12 @@ function computePomodoroTotals(p) {
   return { remainingMs, totalRemaining };
 }
 
+// parseParticipants moved to utils.js; keep a temporary shim for compatibility
+import { parseParticipants as _parseParticipants } from "./utils.js";
+function parseParticipants(input) {
+  return _parseParticipants(input);
+}
+
 async function handlePomodoroTick(id) {
   const p = pomodoros.get(id);
   if (!p) return;
@@ -269,20 +276,47 @@ async function handlePomodoroTick(id) {
   const labelPrefix = p.label ? `${p.label} - ` : "";
 
   if (p.state === "work") {
-    // Work finished -> increment totals and start break
-    totals.set(p.userId, (totals.get(p.userId) || 0) + p.workDuration);
-
-    // Record history for the work session
-    addHistory({
-      id: `${id}_work_${(p.currentCycle || 0) + 1}`,
-      userId: p.userId,
-      channelId: p.channelId,
-      duration: p.workDuration,
-      label: p.label || null,
-      type: "pomodoro_work",
-      endedAt: now,
-      canceled: false,
+    // Work finished -> increment totals and record history for each participant (use helper)
+    const participants = p.participants ? [...p.participants] : [p.userId];
+    // Record with helper
+    import("./lib/pomodoro-utils.js").then((mod) => {
+      try {
+        mod.recordPomodoroWork({
+          id,
+          participants,
+          duration: p.workDuration,
+          channelId: p.channelId,
+          label: p.label,
+          totalsMap: totals,
+          historyArray: history,
+          now,
+        });
+      } catch (err) {
+        console.warn("Failed to record pomodoro work via helper:", err);
+      }
     });
+
+    // Also DM participants (if possible)
+    for (const uid of participants) {
+      (async () => {
+        try {
+          const user = await client.users.fetch(uid).catch(() => null);
+          if (user) {
+            await user
+              .send(
+                `⏰ ${
+                  p.label ? p.label + " - " : ""
+                }Work session complete — ${formatDuration(
+                  p.workDuration
+                )} added to your totals.`
+              )
+              .catch(() => null);
+          }
+        } catch (err) {
+          console.warn(`Failed to DM participant ${uid}:`, err);
+        }
+      })();
+    }
 
     p.state = "break";
     p.endsAt = now + p.breakDuration;
@@ -318,6 +352,30 @@ async function handlePomodoroTick(id) {
         console.warn(
           `Channel unavailable for pomodoro ${id} and DM fallback not allowed.`
         );
+      }
+
+      // DM all participants about break starting (if allowDM)
+      try {
+        if (p.allowDM) {
+          const participants = p.participants
+            ? [...p.participants]
+            : [p.userId];
+          for (const uid of participants) {
+            const user = await client.users.fetch(uid).catch(() => null);
+            if (user)
+              await user
+                .send(
+                  `⏰ ${
+                    p.label ? p.label + " - " : ""
+                  }Break started — ${formatDuration(
+                    p.breakDuration
+                  )}. Cycle time left: ${formatDuration(cycleRemaining)}.`
+                )
+                .catch(() => null);
+          }
+        }
+      } catch (err) {
+        console.warn("Failed to DM participants on break start:", err);
       }
     } catch (err) {
       console.warn("Failed to notify users on pomodoro work->break:", err);
@@ -361,102 +419,134 @@ async function handlePomodoroTick(id) {
                 ? `✅ @here ${labelPrefix}Pomodoro completed! (${p.totalCycles} cycles)`
                 : `✅ ${labelPrefix}<@${p.userId}>, pomodoro completed! (${p.totalCycles} cycles)`
             );
-        } else {
-          if (p.allowDM) {
-            const user = await client.users.fetch(p.userId);
-            await user.send(
-              `✅ ${labelPrefix}Your pomodoro completed! (${p.totalCycles} cycles)`
-            );
-          } else {
-            console.warn(
-              `Channel unavailable for pomodoro ${id} completion and DM fallback not allowed.`
-            );
+        } else if (p.allowDM) {
+          // DM all participants about completion
+          const participants = p.participants
+            ? [...p.participants]
+            : [p.userId];
+          for (const uid of participants) {
+            try {
+              const user = await client.users.fetch(uid).catch(() => null);
+              if (user)
+                await user
+                  .send(
+                    `✅ ${labelPrefix}Your pomodoro completed! (${p.totalCycles} cycles)`
+                  )
+                  .catch(() => null);
+            } catch (err) {
+              console.warn(
+                `Failed to DM participant ${uid} on completion:`,
+                err
+              );
+            }
           }
         }
       } catch (err) {
         console.warn("Failed to notify users on pomodoro completion:", err);
       }
 
-      clearTimeout(p.timeout);
+      // Finalize completion: remove pomodoro and persist
       pomodoros.delete(id);
       await persist();
       return;
-    }
+    } else {
+      // Continue to next cycle
+      const { remainingMs: cycleRemaining, totalRemaining } =
+        computePomodoroTotals(p);
+      const cycle = (p.currentCycle || 0) + 1;
 
-    // Start next work session
-    p.state = "work";
-    const cycle = p.currentCycle + 1;
-    p.endsAt = now + p.workDuration;
-
-    // compute cycle and total remaining
-    const { remainingMs: cycleRemaining, totalRemaining } =
-      computePomodoroTotals(p);
-
-    try {
-      const channel = await getChannel(p.channelId);
-      if (channel && channel.isTextBased && canSendInChannel(channel)) {
-        const msg = p.messageId
-          ? await channel.messages.fetch(p.messageId).catch(() => null)
-          : null;
-        if (msg)
-          await msg.edit({
-            content: p.broadcast
-              ? `🟢 @here ${labelPrefix}Cycle ${cycle}/${
-                  p.totalCycles
-                } — Work started (${formatDuration(
-                  p.workDuration
-                )}) • Cycle time left: ${formatDuration(
-                  cycleRemaining
-                )} • Total time left: ${formatDuration(totalRemaining)}`
-              : `🟢 ${labelPrefix}Cycle ${cycle}/${
-                  p.totalCycles
-                } — Work started (${formatDuration(
-                  p.workDuration
-                )}) • Cycle time left: ${formatDuration(
-                  cycleRemaining
-                )} • Total time left: ${formatDuration(totalRemaining)}`,
-            components: msg.components,
-          });
-        else
-          await channel.send(
-            p.broadcast
-              ? `🟢 @here ${labelPrefix}Cycle ${cycle}/${
-                  p.totalCycles
-                } — Work started (${formatDuration(
-                  p.workDuration
-                )}) • Cycle time left: ${formatDuration(
-                  cycleRemaining
-                )} • Total time left: ${formatDuration(totalRemaining)}`
-              : `🟢 ${labelPrefix}Cycle ${cycle}/${
-                  p.totalCycles
-                } — Work started (${formatDuration(
-                  p.workDuration
-                )}) • Cycle time left: ${formatDuration(
-                  cycleRemaining
-                )} • Total time left: ${formatDuration(totalRemaining)}`
-          );
-      } else {
-        if (p.allowDM) {
-          const user = await client.users.fetch(p.userId);
-          await user.send(
-            `🟢 ${labelPrefix}Cycle ${cycle}/${
-              p.totalCycles
-            } — Work started (${formatDuration(
-              p.workDuration
-            )}) • Cycle time left: ${formatDuration(
-              cycleRemaining
-            )} • Total time left: ${formatDuration(totalRemaining)}`
-          );
+      try {
+        const channel = await getChannel(p.channelId);
+        if (channel && channel.isTextBased && canSendInChannel(channel)) {
+          const msg = p.messageId
+            ? await channel.messages.fetch(p.messageId).catch(() => null)
+            : null;
+          if (msg)
+            await msg.edit({
+              content: p.broadcast
+                ? `🟢 @here ${labelPrefix}Cycle ${cycle}/${
+                    p.totalCycles
+                  } — Work started (${formatDuration(
+                    p.workDuration
+                  )}) • Cycle time left: ${formatDuration(
+                    cycleRemaining
+                  )} • Total time left: ${formatDuration(totalRemaining)}`
+                : `🟢 ${labelPrefix}Cycle ${cycle}/${
+                    p.totalCycles
+                  } — Work started (${formatDuration(
+                    p.workDuration
+                  )}) • Cycle time left: ${formatDuration(
+                    cycleRemaining
+                  )} • Total time left: ${formatDuration(totalRemaining)}`,
+              components: msg?.components,
+            });
+          else
+            await channel.send(
+              p.broadcast
+                ? `🟢 @here ${labelPrefix}Cycle ${cycle}/${
+                    p.totalCycles
+                  } — Work started (${formatDuration(
+                    p.workDuration
+                  )}) • Cycle time left: ${formatDuration(
+                    cycleRemaining
+                  )} • Total time left: ${formatDuration(totalRemaining)}`
+                : `🟢 ${labelPrefix}Cycle ${cycle}/${
+                    p.totalCycles
+                  } — Work started (${formatDuration(
+                    p.workDuration
+                  )}) • Cycle time left: ${formatDuration(
+                    cycleRemaining
+                  )} • Total time left: ${formatDuration(totalRemaining)}`
+            );
         } else {
-          console.warn(
-            `Channel unavailable for pomodoro ${id} and DM fallback not allowed.`
-          );
+          if (p.allowDM) {
+            const participants = p.participants
+              ? [...p.participants]
+              : [p.userId];
+            for (const uid of participants) {
+              try {
+                const user = await client.users.fetch(uid).catch(() => null);
+                if (user)
+                  await user
+                    .send(
+                      `🟢 ${labelPrefix}Cycle ${cycle}/${
+                        p.totalCycles
+                      } — Work started (${formatDuration(
+                        p.workDuration
+                      )}) • Cycle time left: ${formatDuration(
+                        cycleRemaining
+                      )} • Total time left: ${formatDuration(totalRemaining)}`
+                    )
+                    .catch(() => null);
+              } catch (err) {
+                console.warn(
+                  `Failed to DM participant ${uid} on work start:`,
+                  err
+                );
+              }
+            }
+          } else {
+            console.warn(
+              `Channel unavailable for pomodoro ${id} and DM fallback not allowed.`
+            );
+          }
         }
+      } catch (err) {
+        console.warn("Failed to notify users on pomodoro next work:", err);
       }
-    } catch (err) {
-      console.warn("Failed to notify users on pomodoro next work:", err);
-    }
 
+      clearTimeout(p.timeout);
+      p.timeout = setTimeout(async () => {
+        try {
+          await handlePomodoroTick(id);
+        } catch (err) {
+          console.error("Pomodoro tick error:", err);
+        }
+      }, p.workDuration);
+
+      await persist();
+      return;
+    }
     clearTimeout(p.timeout);
     p.timeout = setTimeout(async () => {
       try {
@@ -680,6 +770,7 @@ client.once("clientReady", async () => {
           label: p.label,
           allowDM: !!p.allowDM,
           broadcast: !!p.broadcast,
+          participants: new Set(p.participants || []),
         });
       }
     }
@@ -704,10 +795,13 @@ client.on("interactionCreate", async (interaction) => {
     if (interaction.customId.startsWith("cancel_")) {
       const id = interaction.customId.split("_")[1];
       const timer = timers.get(id);
+      const isOwner = OWNER_ID && interaction.user.id === OWNER_ID;
+      const isAuthorized =
+        interaction.guildId &&
+        allowedResetters.get(interaction.guildId)?.has(interaction.user.id);
       if (
         !timer ||
-        (timer.userId !== interaction.user.id &&
-          !hasManagePermissions(interaction))
+        (timer.userId !== interaction.user.id && !isOwner && !isAuthorized)
       )
         return safeReply(interaction, {
           content:
@@ -758,10 +852,11 @@ client.on("interactionCreate", async (interaction) => {
     if (interaction.customId.startsWith("pomodoro_stop_")) {
       const id = interaction.customId.split("_")[2];
       const p = pomodoros.get(id);
-      if (
-        !p ||
-        (p.userId !== interaction.user.id && !hasManagePermissions(interaction))
-      )
+      const isOwner = OWNER_ID && interaction.user.id === OWNER_ID;
+      const isAuthorized =
+        interaction.guildId &&
+        allowedResetters.get(interaction.guildId)?.has(interaction.user.id);
+      if (!p || (p.userId !== interaction.user.id && !isOwner && !isAuthorized))
         return safeReply(interaction, {
           content: "❌ Pomodoro not found or not yours",
           flags: EPHEMERAL,
@@ -973,10 +1068,23 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
+      const participantsStr =
+        interaction.options.getString("participants") || "";
+      const parsed = parseParticipants(participantsStr);
+      // Ensure owner is included
+      if (!parsed.includes(interaction.user.id))
+        parsed.push(interaction.user.id);
+      const participantsSet = new Set(parsed);
+
       const now = Date.now();
       const endsAt = now + workDuration;
 
       const totalRemaining = cycles * (workDuration + breakDuration);
+
+      // create participants mention text
+      const participantsText = [...participantsSet]
+        .map((id) => `<@${id}>`)
+        .join(" ");
 
       // create message
       const follow = await interaction.followUp({
@@ -989,7 +1097,9 @@ client.on("interactionCreate", async (interaction) => {
               workDuration
             )}) • Cycle time left: ${formatDuration(
               workDuration
-            )} • Total time left: ${formatDuration(totalRemaining)}`
+            )} • Total time left: ${formatDuration(totalRemaining)}${
+              participantsText ? `\nParticipants: ${participantsText}` : ""
+            }`
           : `🟢 Pomodoro started ${
               label ? `— ${label} ` : ""
             }• Work: ${formatDuration(workDuration)} • Break: ${formatDuration(
@@ -998,7 +1108,9 @@ client.on("interactionCreate", async (interaction) => {
               workDuration
             )}) • Cycle time left: ${formatDuration(
               workDuration
-            )} • Total time left: ${formatDuration(totalRemaining)}`,
+            )} • Total time left: ${formatDuration(totalRemaining)}${
+              participantsText ? `\nParticipants: ${participantsText}` : ""
+            }`,
         components: [row],
       });
 
@@ -1083,6 +1195,44 @@ client.on("interactionCreate", async (interaction) => {
       await persist();
       return safeReply(interaction, {
         content: `🛑 Pomodoro stopped`,
+        flags: EPHEMERAL,
+      });
+    }
+
+    if (ps === "participants") {
+      const id = interaction.options.getString("id");
+      let p = null;
+      if (id) p = pomodoros.get(id);
+      else
+        p = [...pomodoros.values()].find(
+          (x) => x.userId === interaction.user.id
+        );
+      if (!p)
+        return safeReply(interaction, {
+          content: "📭 No active pomodoro found.",
+          flags: EPHEMERAL,
+        });
+
+      const isOwner = OWNER_ID && interaction.user.id === OWNER_ID;
+      const isAuthorized =
+        interaction.guildId &&
+        allowedResetters.get(interaction.guildId)?.has(interaction.user.id);
+      const isParticipant = p.participants
+        ? p.participants.has(interaction.user.id)
+        : p.userId === interaction.user.id;
+      if (!isOwner && !isAuthorized && !isParticipant)
+        return safeReply(interaction, {
+          content:
+            "❌ You are not authorized to view participants for this pomodoro.",
+          flags: EPHEMERAL,
+        });
+
+      const parts = p.participants ? [...p.participants] : [p.userId];
+      const text = parts.map((id) => `<@${id}>`).join(" \n");
+      return safeReply(interaction, {
+        content: `📋 Participants for pomodoro ${
+          p.label ? `**${p.label}** ` : ""
+        }${p.messageId || id ? `(${p.messageId || id})` : ""}:\n${text}`,
         flags: EPHEMERAL,
       });
     }
@@ -1270,10 +1420,13 @@ client.on("interactionCreate", async (interaction) => {
   if (sub === "cancel") {
     const id = interaction.options.getString("id");
     const timer = timers.get(id);
+    const isOwner = OWNER_ID && interaction.user.id === OWNER_ID;
+    const isAuthorized =
+      interaction.guildId &&
+      allowedResetters.get(interaction.guildId)?.has(interaction.user.id);
     if (
       !timer ||
-      (timer.userId !== interaction.user.id &&
-        !hasManagePermissions(interaction))
+      (timer.userId !== interaction.user.id && !isOwner && !isAuthorized)
     )
       return safeReply(interaction, "❌ Timer not found or not yours.");
     clearTimeout(timer.timeout);
@@ -1316,13 +1469,37 @@ client.on("interactionCreate", async (interaction) => {
   }
 
   if (sub === "list") {
+    const isOwner = OWNER_ID && interaction.user.id === OWNER_ID;
+    const isAuthorized =
+      interaction.guildId &&
+      allowedResetters.get(interaction.guildId)?.has(interaction.user.id);
+
+    const now = Date.now();
+
+    if (isOwner || isAuthorized) {
+      const allTimers = [...timers.entries()];
+      if (!allTimers.length)
+        return safeReply(interaction, "📭 There are no active timers.");
+      const text = allTimers
+        .map(([id, t]) => {
+          const remainingMs = Math.max(0, t.endTime - now);
+          return `🆔 ${id} → ${formatDuration(
+            remainingMs
+          )} remaining • Owner: <@${t.userId}> • Channel: <#${t.channelId}>${
+            t.label ? ` • ${t.label}` : ""
+          }`;
+        })
+        .join("\n");
+      return safeReply(interaction, `📋 All active timers:\n${text}`);
+    }
+
+    // Fallback: show only the requester's timers
     const userTimers = [...timers.entries()].filter(
       ([, t]) => t.userId === interaction.user.id
     );
     if (!userTimers.length)
       return safeReply(interaction, "📭 You have no active timers.");
 
-    const now = Date.now();
     const text = userTimers
       .map(([id, t]) => {
         const remainingMs = Math.max(0, t.endTime - now);
@@ -1458,6 +1635,7 @@ client.on("interactionCreate", async (interaction) => {
 
   if (sub === "stats") {
     const timeframe = interaction.options.getString("timeframe") || "all";
+    const global = !!interaction.options.getBoolean("global");
     const now = Date.now();
     let start = 0;
     if (timeframe === "today") {
@@ -1470,21 +1648,33 @@ client.on("interactionCreate", async (interaction) => {
       start = 0; // all
     }
 
-    // Aggregate from history if timeframe is not "all", otherwise fall back to totals
-    let agg = new Map();
-
-    if (timeframe === "all") {
-      for (const [uid, ms] of totals.entries()) agg.set(uid, ms);
-    } else {
+    // If not requesting global leaderboard, show only the caller's total
+    if (!global) {
+      // Aggregate from history for completed run time (not scheduled/started time)
       const filtered = history.filter(
         (h) =>
           !h.canceled &&
-          h.endedAt >= start &&
-          (h.type === "timer" || h.type === "pomodoro_work")
+          (h.type === "timer" || h.type === "pomodoro_work") &&
+          (timeframe === "all" || h.endedAt >= start) &&
+          h.userId === interaction.user.id
       );
-      for (const h of filtered)
-        agg.set(h.userId, (agg.get(h.userId) || 0) + (h.duration || 0));
+      const mine = filtered.reduce((s, h) => s + (h.duration || 0), 0);
+      return safeReply(interaction, {
+        content: `📊 Your timer total (${timeframe}): ${formatDuration(mine)}`,
+        flags: EPHEMERAL,
+      });
     }
+
+    // Aggregate completed run time from history (counts only ended, non-canceled timers and pomodoro work sessions)
+    const agg = new Map();
+    const filtered = history.filter(
+      (h) =>
+        !h.canceled &&
+        (h.type === "timer" || h.type === "pomodoro_work") &&
+        (timeframe === "all" || h.endedAt >= start)
+    );
+    for (const h of filtered)
+      agg.set(h.userId, (agg.get(h.userId) || 0) + (h.duration || 0));
 
     if (!agg.size)
       return safeReply(interaction, "📭 No timers in that timeframe.");
