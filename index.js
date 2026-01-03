@@ -355,6 +355,17 @@ async function handlePomodoroTick(id) {
       .map((uid) => `<@${uid}> ${formatDuration(totals.get(uid) || 0)}`)
       .join(" • ");
 
+    // We'll send channel-only notification after updating the pomodoro to break
+    // so that computePomodoroTotals sees the updated state/end time.
+    // (notification code moved below)
+
+    p.state = "break";
+    p.endsAt = now + p.breakDuration;
+
+    // compute cycle and total remaining
+    const { remainingMs: cycleRemaining, totalRemaining } =
+      computePomodoroTotals(p);
+
     // Send channel-only message mentioning participants and their new totals
     try {
       const participantsText = participants.map((id) => `<@${id}>`).join(" ");
@@ -387,13 +398,6 @@ async function handlePomodoroTick(id) {
         err
       );
     }
-
-    p.state = "break";
-    p.endsAt = now + p.breakDuration;
-
-    // compute cycle and total remaining
-    const { remainingMs: cycleRemaining, totalRemaining } =
-      computePomodoroTotals(p);
 
     // refresh message every second while on break
     if (p.interval) clearInterval(p.interval);
