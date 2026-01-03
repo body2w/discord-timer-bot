@@ -210,6 +210,27 @@ async function persist() {
   });
 }
 
+function computePomodoroTotals(p) {
+  const now = Date.now();
+  const remainingMs = Math.max(0, p.endsAt - now);
+  let totalRemaining = remainingMs;
+  let curState = p.state;
+  let curCycle = p.currentCycle;
+  while (curCycle < p.totalCycles) {
+    if (curState === "work") {
+      // after work ends there's a break
+      totalRemaining += p.breakDuration;
+      curState = "break";
+    } else {
+      // after break ends there's a work session, which completes a cycle
+      totalRemaining += p.workDuration;
+      curState = "work";
+      curCycle += 1;
+    }
+  }
+  return { remainingMs, totalRemaining };
+}
+
 async function handlePomodoroTick(id) {
   const p = pomodoros.get(id);
   if (!p) return;
@@ -236,6 +257,10 @@ async function handlePomodoroTick(id) {
     p.state = "break";
     p.endsAt = now + p.breakDuration;
 
+    // compute cycle and total remaining
+    const { remainingMs: cycleRemaining, totalRemaining } =
+      computePomodoroTotals(p);
+
     try {
       const res = await sendNotification({
         channelId: p.channelId,
@@ -245,7 +270,9 @@ async function handlePomodoroTick(id) {
           p.userId
         }>, work session complete. Break started — ${formatDuration(
           p.breakDuration
-        )}.`,
+        )}. Cycle time left: ${formatDuration(
+          cycleRemaining
+        )} • Total time left: ${formatDuration(totalRemaining)}.`,
         components: p.messageId ? undefined : p.messageId?.components || [],
         allowDM: !!p.allowDM,
       });
@@ -319,6 +346,10 @@ async function handlePomodoroTick(id) {
     const cycle = p.currentCycle + 1;
     p.endsAt = now + p.workDuration;
 
+    // compute cycle and total remaining
+    const { remainingMs: cycleRemaining, totalRemaining } =
+      computePomodoroTotals(p);
+
     try {
       const channel = await getChannel(p.channelId);
       if (channel && channel.isTextBased && canSendInChannel(channel)) {
@@ -329,14 +360,22 @@ async function handlePomodoroTick(id) {
           await msg.edit({
             content: `🟢 ${labelPrefix}Cycle ${cycle}/${
               p.totalCycles
-            } — Work started (${formatDuration(p.workDuration)})`,
+            } — Work started (${formatDuration(
+              p.workDuration
+            )}) • Cycle time left: ${formatDuration(
+              cycleRemaining
+            )} • Total time left: ${formatDuration(totalRemaining)}`,
             components: msg.components,
           });
         else
           await channel.send(
             `🟢 ${labelPrefix}Cycle ${cycle}/${
               p.totalCycles
-            } — Work started (${formatDuration(p.workDuration)})`
+            } — Work started (${formatDuration(
+              p.workDuration
+            )}) • Cycle time left: ${formatDuration(
+              cycleRemaining
+            )} • Total time left: ${formatDuration(totalRemaining)}`
           );
       } else {
         if (p.allowDM) {
@@ -344,7 +383,11 @@ async function handlePomodoroTick(id) {
           await user.send(
             `🟢 ${labelPrefix}Cycle ${cycle}/${
               p.totalCycles
-            } — Work started (${formatDuration(p.workDuration)})`
+            } — Work started (${formatDuration(
+              p.workDuration
+            )}) • Cycle time left: ${formatDuration(
+              cycleRemaining
+            )} • Total time left: ${formatDuration(totalRemaining)}`
           );
         } else {
           console.warn(
@@ -776,15 +819,19 @@ client.on("interactionCreate", async (interaction) => {
       const now = Date.now();
       const endsAt = now + workDuration;
 
+      const totalRemaining = cycles * (workDuration + breakDuration);
+
       // create message
       const follow = await interaction.followUp({
         content: `🟢 Pomodoro started ${
           label ? `— ${label} ` : ""
         }• Work: ${formatDuration(workDuration)} • Break: ${formatDuration(
           breakDuration
-        )} • Cycles: ${cycles} \nCycle 1/${cycles} — Work ( ${formatDuration(
+        )} • Cycles: ${cycles} \nCycle 1/${cycles} — Work (${formatDuration(
           workDuration
-        )} )`,
+        )}) • Cycle time left: ${formatDuration(
+          workDuration
+        )} • Total time left: ${formatDuration(totalRemaining)}`,
         components: [row],
       });
 
@@ -878,7 +925,7 @@ client.on("interactionCreate", async (interaction) => {
           content: "📭 You have no active pomodoro.",
           flags: EPHEMERAL,
         });
-      const remaining = Math.max(0, Math.floor((p.endsAt - Date.now()) / 1000));
+      const { remainingMs, totalRemaining } = computePomodoroTotals(p);
       const stateText =
         p.state === "work"
           ? `Work — ${formatDuration(p.workDuration)}`
@@ -888,7 +935,9 @@ client.on("interactionCreate", async (interaction) => {
           p.label ? `**${p.label}** — ` : ""
         }${stateText} • Cycle ${p.currentCycle + 1}/${
           p.totalCycles
-        } • ${remaining}s remaining`,
+        } • Cycle time left: ${formatDuration(
+          remainingMs
+        )} • Total time left: ${formatDuration(totalRemaining)}`,
         flags: EPHEMERAL,
       });
     }
@@ -1081,8 +1130,8 @@ client.on("interactionCreate", async (interaction) => {
     const now = Date.now();
     const text = userTimers
       .map(([id, t]) => {
-        const remaining = Math.max(0, Math.floor((t.endTime - now) / 1000));
-        return `🆔 ${id} → ${remaining}s remaining`;
+        const remainingMs = Math.max(0, t.endTime - now);
+        return `🆔 ${id} → ${formatDuration(remainingMs)} remaining`;
       })
       .join("\n");
 

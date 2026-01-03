@@ -1,9 +1,22 @@
 {
   "timers": {},
   "totals": {
-    "1437392428935024713": 8000
+    "1437392428935024713": 12000
   },
-  "pomodoros": {},
+  "pomodoros": {
+    "mjxx5lbm": {
+      "userId": "1437392428935024713",
+      "channelId": "1456895599281573963",
+      "messageId": "1456896311608606741",
+      "state": "work",
+      "currentCycle": 0,
+      "totalCycles": 6,
+      "workDuration": 3000000,
+      "breakDuration": 600000,
+      "endsAt": 1767424546546,
+      "label": "studing for 300 min"
+    }
+  },
   "history": [
     {
       "id": "mjwvf5zi",
@@ -64,7 +77,37 @@
       "type": "timer",
       "endedAt": 1767360508180,
       "canceled": false
+    },
+    {
+      "id": "mjxwx0r2",
+      "userId": "1437392428935024713",
+      "channelId": "1456617953704284182",
+      "duration": 1000,
+      "label": null,
+      "type": "timer",
+      "endedAt": 1767421148945,
+      "canceled": false
+    },
+    {
+      "id": "mjxx3jfb",
+      "userId": "1437392428935024713",
+      "channelId": "1456895599281573963",
+      "duration": 2000,
+      "label": null,
+      "type": "timer",
+      "endedAt": 1767421453547,
+      "canceled": false
+    },
+    {
+      "id": "mjxx4690",
+      "userId": "1437392428935024713",
+      "channelId": "1456895599281573963",
+      "duration": 1000,
+      "label": null,
+      "type": "timer",
+      "endedAt": 1767421482117,
+      "canceled": false
     }
   ],
-  "savedAt": "2026-01-02T13:28:28.181Z"
+  "savedAt": "2026-01-03T06:25:47.266Z"
 }
