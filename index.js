@@ -203,7 +203,7 @@ async function persist() {
       duration: t.duration,
       label: t.label || null,
       allowDM: !!t.allowDM,
-      broadcast: !!t.broadcast,
+      participants: t.participants ? [...t.participants] : [t.userId],
     };
   }
   const plainTotals = {};
@@ -222,7 +222,6 @@ async function persist() {
       endsAt: p.endsAt,
       label: p.label || null,
       allowDM: !!p.allowDM,
-      broadcast: !!p.broadcast,
       participants: p.participants ? [...p.participants] : [],
     };
   }
@@ -247,17 +246,21 @@ function computePomodoroTotals(p) {
   const remainingMs = Math.max(0, p.endsAt - now);
   let totalRemaining = remainingMs;
   let curState = p.state;
-  let curCycle = p.currentCycle;
-  while (curCycle < p.totalCycles) {
+  let curCycle = p.currentCycle || 0;
+
+  // Simulate forward until the number of completed cycles reaches totalCycles.
+  while (true) {
     if (curState === "work") {
       // after work ends there's a break
       totalRemaining += p.breakDuration;
       curState = "break";
     } else {
-      // after break ends there's a work session, which completes a cycle
+      // after break ends the cycle completes
+      curCycle += 1;
+      if (curCycle >= p.totalCycles) break;
+      // otherwise a new work session starts
       totalRemaining += p.workDuration;
       curState = "work";
-      curCycle += 1;
     }
   }
   return { remainingMs, totalRemaining };
@@ -265,6 +268,57 @@ function computePomodoroTotals(p) {
 
 // parseParticipants moved to utils.js; keep a temporary shim for compatibility
 import { parseParticipants as _parseParticipants } from "./utils.js";
+
+async function updatePomodoroMessage(id) {
+  const p = pomodoros.get(id);
+  if (!p) return;
+  try {
+    const now = Date.now();
+    const labelPrefix = p.label ? `${p.label} - ` : "";
+    const remainingMs = Math.max(0, (p.endsAt || now) - now);
+    const { totalRemaining } = computePomodoroTotals(p);
+    const cycle =
+      p.state === "work" ? (p.currentCycle || 0) + 1 : p.currentCycle || 0 || 0;
+    const participantsText = p.participants
+      ? [...p.participants].map((id) => `<@${id}>`).join(" ")
+      : `<@${p.userId}>`;
+    let content;
+    if (p.state === "work") {
+      content = `🟢 ${labelPrefix}Cycle ${cycle}/${
+        p.totalCycles
+      } — Work (${formatDuration(
+        p.workDuration
+      )}) • Cycle time left: ${formatDuration(
+        remainingMs
+      )} • Total time left: ${formatDuration(totalRemaining)}${
+        participantsText ? ` • Participants: ${participantsText}` : ""
+      }`;
+    } else {
+      content = `⏰ ${labelPrefix}Break — ${formatDuration(
+        p.breakDuration
+      )} • Break time left: ${formatDuration(
+        remainingMs
+      )} • Total time left: ${formatDuration(totalRemaining)}${
+        participantsText ? ` • Participants: ${participantsText}` : ""
+      }`;
+    }
+
+    const channel = await getChannel(p.channelId);
+    if (channel && channel.isTextBased && canSendInChannel(channel)) {
+      if (p.messageId) {
+        const msg = await channel.messages.fetch(p.messageId).catch(() => null);
+        if (msg)
+          await msg
+            .edit({ content, components: msg?.components || [] })
+            .catch(() => null);
+        else await channel.send(content).catch(() => null);
+      }
+    }
+  } catch (err) {
+    // Suppress errors from frequent updates
+  }
+}
+
 function parseParticipants(input) {
   return _parseParticipants(input);
 }
@@ -279,44 +333,59 @@ async function handlePomodoroTick(id) {
   if (p.state === "work") {
     // Work finished -> increment totals and record history for each participant (use helper)
     const participants = p.participants ? [...p.participants] : [p.userId];
-    // Record with helper
-    import("./lib/pomodoro-utils.js").then((mod) => {
-      try {
-        mod.recordPomodoroWork({
-          id,
-          participants,
-          duration: p.workDuration,
-          channelId: p.channelId,
-          label: p.label,
-          totalsMap: totals,
-          historyArray: history,
-          now,
-        });
-      } catch (err) {
-        console.warn("Failed to record pomodoro work via helper:", err);
-      }
-    });
+    // Record work and update totals (synchronously) then notify channel only (no DMs)
+    try {
+      const mod = await import("./lib/pomodoro-utils.js");
+      mod.recordPomodoroWork({
+        id,
+        participants,
+        duration: p.workDuration,
+        channelId: p.channelId,
+        label: p.label,
+        totalsMap: totals,
+        historyArray: history,
+        now,
+      });
+    } catch (err) {
+      console.warn("Failed to record pomodoro work via helper:", err);
+    }
 
-    // Also DM participants (if possible)
-    for (const uid of participants) {
-      (async () => {
-        try {
-          const user = await client.users.fetch(uid).catch(() => null);
-          if (user) {
-            await user
-              .send(
-                `⏰ ${
-                  p.label ? p.label + " - " : ""
-                }Work session complete — ${formatDuration(
-                  p.workDuration
-                )} added to your totals.`
-              )
-              .catch(() => null);
-          }
-        } catch (err) {
-          console.warn(`Failed to DM participant ${uid}:`, err);
-        }
-      })();
+    // Build totals text to show updated totals per participant
+    const totalsText = participants
+      .map((uid) => `<@${uid}> ${formatDuration(totals.get(uid) || 0)}`)
+      .join(" • ");
+
+    // Send channel-only message mentioning participants and their new totals
+    try {
+      const participantsText = participants.map((id) => `<@${id}>`).join(" ");
+      const content = `⏰ ${labelPrefix}${participantsText}, work session complete — ${formatDuration(
+        p.workDuration
+      )} added to totals (${totalsText}). Break started — ${formatDuration(
+        p.breakDuration
+      )}. Cycle time left: ${formatDuration(
+        cycleRemaining
+      )} • Total time left: ${formatDuration(totalRemaining)}.`;
+
+      const channel = await getChannel(p.channelId);
+      if (channel && channel.isTextBased && canSendInChannel(channel)) {
+        const msg = p.messageId
+          ? await channel.messages.fetch(p.messageId).catch(() => null)
+          : null;
+        if (msg)
+          await msg
+            .edit({ content, components: msg?.components || [] })
+            .catch(() => null);
+        else await channel.send(content).catch(() => null);
+      } else {
+        console.warn(
+          `Channel unavailable for pomodoro ${id}; not sending DM notifications.`
+        );
+      }
+    } catch (err) {
+      console.warn(
+        "Failed to send channel notification for pomodoro work->break:",
+        err
+      );
     }
 
     p.state = "break";
@@ -326,61 +395,12 @@ async function handlePomodoroTick(id) {
     const { remainingMs: cycleRemaining, totalRemaining } =
       computePomodoroTotals(p);
 
-    try {
-      const content = p.broadcast
-        ? `⏰ @here ${labelPrefix}Work session complete. Break started — ${formatDuration(
-            p.breakDuration
-          )}. Cycle time left: ${formatDuration(
-            cycleRemaining
-          )} • Total time left: ${formatDuration(totalRemaining)}.`
-        : `⏰ ${labelPrefix}<@${
-            p.userId
-          }>, work session complete. Break started — ${formatDuration(
-            p.breakDuration
-          )}. Cycle time left: ${formatDuration(
-            cycleRemaining
-          )} • Total time left: ${formatDuration(totalRemaining)}.`;
-
-      const res = await sendNotification({
-        channelId: p.channelId,
-        messageId: p.messageId,
-        userId: p.broadcast ? null : p.userId,
-        content,
-        components: p.messageId ? undefined : p.messageId?.components || [],
-        allowDM: !!p.allowDM,
-      });
-      if (!res.channel && !res.dm && !p.allowDM) {
-        console.warn(
-          `Channel unavailable for pomodoro ${id} and DM fallback not allowed.`
-        );
-      }
-
-      // DM all participants about break starting (if allowDM)
-      try {
-        if (p.allowDM) {
-          const participants = p.participants
-            ? [...p.participants]
-            : [p.userId];
-          for (const uid of participants) {
-            const user = await client.users.fetch(uid).catch(() => null);
-            if (user)
-              await user
-                .send(
-                  `⏰ ${
-                    p.label ? p.label + " - " : ""
-                  }Break started — ${formatDuration(
-                    p.breakDuration
-                  )}. Cycle time left: ${formatDuration(cycleRemaining)}.`
-                )
-                .catch(() => null);
-          }
-        }
-      } catch (err) {
-        console.warn("Failed to DM participants on break start:", err);
-      }
-    } catch (err) {
-      console.warn("Failed to notify users on pomodoro work->break:", err);
-    }
+    // refresh message every second while on break
+    if (p.interval) clearInterval(p.interval);
+    p.interval = setInterval(() => {
+      updatePomodoroMessage(id).catch(() => null);
+    }, 1000);
+    updatePomodoroMessage(id).catch(() => null);
 
     clearTimeout(p.timeout);
     p.timeout = setTimeout(async () => {
@@ -407,46 +427,35 @@ async function handlePomodoroTick(id) {
           const msg = p.messageId
             ? await channel.messages.fetch(p.messageId).catch(() => null)
             : null;
+          const participantsText = p.participants
+            ? [...p.participants].map((id) => `<@${id}>`).join(" ")
+            : `<@${p.userId}>`;
+          const totalsText = p.participants
+            ? [...p.participants]
+                .map(
+                  (uid) => `<@${uid}> ${formatDuration(totals.get(uid) || 0)}`
+                )
+                .join(" • ")
+            : `<@${p.userId}> ${formatDuration(totals.get(p.userId) || 0)}`;
+          const content = `✅ ${labelPrefix}${participantsText}, pomodoro completed! (${p.totalCycles} cycles) • Totals: ${totalsText}`;
           if (msg)
             await msg.edit({
-              content: p.broadcast
-                ? `✅ @here ${labelPrefix}Pomodoro completed! (${p.totalCycles} cycles)`
-                : `✅ ${labelPrefix}<@${p.userId}>, pomodoro completed! (${p.totalCycles} cycles)`,
+              content,
               components: [],
             });
-          else
-            await channel.send(
-              p.broadcast
-                ? `✅ @here ${labelPrefix}Pomodoro completed! (${p.totalCycles} cycles)`
-                : `✅ ${labelPrefix}<@${p.userId}>, pomodoro completed! (${p.totalCycles} cycles)`
-            );
-        } else if (p.allowDM) {
-          // DM all participants about completion
-          const participants = p.participants
-            ? [...p.participants]
-            : [p.userId];
-          for (const uid of participants) {
-            try {
-              const user = await client.users.fetch(uid).catch(() => null);
-              if (user)
-                await user
-                  .send(
-                    `✅ ${labelPrefix}Your pomodoro completed! (${p.totalCycles} cycles)`
-                  )
-                  .catch(() => null);
-            } catch (err) {
-              console.warn(
-                `Failed to DM participant ${uid} on completion:`,
-                err
-              );
-            }
-          }
+          else await channel.send(content);
+        } else {
+          // Channel unavailable — do not send DMs for pomodoro events per configuration
+          console.warn(
+            `Channel unavailable for pomodoro ${id} completion; not sending DM notifications.`
+          );
         }
       } catch (err) {
         console.warn("Failed to notify users on pomodoro completion:", err);
       }
 
-      // Finalize completion: remove pomodoro and persist
+      // Finalize completion: clear updater, remove pomodoro and persist
+      if (p.interval) clearInterval(p.interval);
       pomodoros.delete(id);
       await persist();
       return;
@@ -462,79 +471,50 @@ async function handlePomodoroTick(id) {
           const msg = p.messageId
             ? await channel.messages.fetch(p.messageId).catch(() => null)
             : null;
+          const participantsText = p.participants
+            ? [...p.participants].map((id) => `<@${id}>`).join(" ")
+            : `<@${p.userId}>`;
           if (msg)
             await msg.edit({
-              content: p.broadcast
-                ? `🟢 @here ${labelPrefix}Cycle ${cycle}/${
-                    p.totalCycles
-                  } — Work started (${formatDuration(
-                    p.workDuration
-                  )}) • Cycle time left: ${formatDuration(
-                    cycleRemaining
-                  )} • Total time left: ${formatDuration(totalRemaining)}`
-                : `🟢 ${labelPrefix}Cycle ${cycle}/${
-                    p.totalCycles
-                  } — Work started (${formatDuration(
-                    p.workDuration
-                  )}) • Cycle time left: ${formatDuration(
-                    cycleRemaining
-                  )} • Total time left: ${formatDuration(totalRemaining)}`,
+              content: `🟢 ${labelPrefix}Cycle ${cycle}/${
+                p.totalCycles
+              } — Work started (${formatDuration(
+                p.workDuration
+              )}) • Cycle time left: ${formatDuration(
+                cycleRemaining
+              )} • Total time left: ${formatDuration(totalRemaining)}${
+                participantsText ? ` • Participants: ${participantsText}` : ""
+              }`,
               components: msg?.components,
             });
           else
             await channel.send(
-              p.broadcast
-                ? `🟢 @here ${labelPrefix}Cycle ${cycle}/${
-                    p.totalCycles
-                  } — Work started (${formatDuration(
-                    p.workDuration
-                  )}) • Cycle time left: ${formatDuration(
-                    cycleRemaining
-                  )} • Total time left: ${formatDuration(totalRemaining)}`
-                : `🟢 ${labelPrefix}Cycle ${cycle}/${
-                    p.totalCycles
-                  } — Work started (${formatDuration(
-                    p.workDuration
-                  )}) • Cycle time left: ${formatDuration(
-                    cycleRemaining
-                  )} • Total time left: ${formatDuration(totalRemaining)}`
+              `🟢 ${labelPrefix}Cycle ${cycle}/${
+                p.totalCycles
+              } — Work started (${formatDuration(
+                p.workDuration
+              )}) • Cycle time left: ${formatDuration(
+                cycleRemaining
+              )} • Total time left: ${formatDuration(totalRemaining)}${
+                participantsText ? ` • Participants: ${participantsText}` : ""
+              }`
             );
         } else {
-          if (p.allowDM) {
-            const participants = p.participants
-              ? [...p.participants]
-              : [p.userId];
-            for (const uid of participants) {
-              try {
-                const user = await client.users.fetch(uid).catch(() => null);
-                if (user)
-                  await user
-                    .send(
-                      `🟢 ${labelPrefix}Cycle ${cycle}/${
-                        p.totalCycles
-                      } — Work started (${formatDuration(
-                        p.workDuration
-                      )}) • Cycle time left: ${formatDuration(
-                        cycleRemaining
-                      )} • Total time left: ${formatDuration(totalRemaining)}`
-                    )
-                    .catch(() => null);
-              } catch (err) {
-                console.warn(
-                  `Failed to DM participant ${uid} on work start:`,
-                  err
-                );
-              }
-            }
-          } else {
-            console.warn(
-              `Channel unavailable for pomodoro ${id} and DM fallback not allowed.`
-            );
-          }
+          // Channel unavailable — do not send DMs for pomodoro events per configuration
+          console.warn(
+            `Channel unavailable for pomodoro ${id} next work start; not sending DM notifications.`
+          );
         }
       } catch (err) {
         console.warn("Failed to notify users on pomodoro next work:", err);
       }
+
+      // refresh message every second while on work
+      if (p.interval) clearInterval(p.interval);
+      p.interval = setInterval(() => {
+        updatePomodoroMessage(id).catch(() => null);
+      }, 1000);
+      updatePomodoroMessage(id).catch(() => null);
 
       clearTimeout(p.timeout);
       p.timeout = setTimeout(async () => {
@@ -583,32 +563,44 @@ client.once("clientReady", async () => {
     const now = Date.now();
     for (const [id, t] of Object.entries(state.timers || {})) {
       const remaining = t.endTime - now;
+      const participantsArr =
+        t.participants && t.participants.length ? t.participants : [t.userId];
+      const participantsSet = new Set(participantsArr);
+
       if (remaining <= 0) {
         // Timer expired while offline — try to send message in channel, else DM
         try {
           const channel = await getChannel(t.channelId);
-          // Use sendNotification helper for offline-expired timers
+          // Build content mentioning participants
+          const participantsText = [...participantsSet]
+            .map((id) => `<@${id}>`)
+            .join(" ");
+          // Use sendNotification helper for offline-expired timers (no single-user DM fallback)
           const res = await sendNotification({
             channelId: t.channelId,
             messageId: t.messageId,
-            userId: t.userId,
-            content: `⏰ <@${t.userId}>, your timer (${formatDuration(
+            userId: null,
+            content: `⏰ ${participantsText} — Your timer (${formatDuration(
               t.duration
             )}) ended while I was offline.`,
             components: [],
             allowDM: !!t.allowDM,
           });
 
-          addHistory({
-            id,
-            userId: t.userId,
-            channelId: t.channelId,
-            duration: t.duration,
-            label: t.label || null,
-            type: "timer",
-            endedAt: now,
-            canceled: false,
-          });
+          // Record history and recompute totals for all participants
+          for (const uid of participantsSet) {
+            addHistory({
+              id,
+              userId: uid,
+              channelId: t.channelId,
+              duration: t.duration,
+              label: t.label || null,
+              type: "timer",
+              endedAt: now,
+              canceled: false,
+            });
+            totals.set(uid, (totals.get(uid) || 0) + t.duration);
+          }
           // Recompute totals now that we've appended history for an expired timer
           recomputeTotalsFromHistory(totals, state.history || []);
           await persist();
@@ -618,26 +610,27 @@ client.once("clientReady", async () => {
           // otherwise fall through (log already handled in sendNotification)
         } catch (err) {
           console.warn(
-            `Could not notify user ${t.userId} for expired timer ${id}:`,
+            `Could not notify participants for expired timer ${id}:`,
             err
           );
         }
-        // Fallback DM (only if allowed)
-        // If sendNotification above didn't deliver, attempt DM fallback explicitly
+        // Fallback DM (only if allowed) — DM all participants
         if (t.allowDM) {
-          try {
-            const user = await client.users.fetch(t.userId);
-            await user.send(
-              `⏰ Your timer (${formatDuration(
-                t.duration
-              )}) ended while I was offline.`
-            );
-            // history/persist already saved above
-          } catch (err) {
-            console.error(
-              `Failed to DM user ${t.userId} for expired timer ${id}:`,
-              err
-            );
+          for (const uid of participantsSet) {
+            try {
+              const user = await client.users.fetch(uid);
+              await user.send(
+                `⏰ Your timer (${formatDuration(
+                  t.duration
+                )}) ended while I was offline.`
+              );
+              // history/persist already saved above
+            } catch (err) {
+              console.error(
+                `Failed to DM participant ${uid} for expired timer ${id}:`,
+                err
+              );
+            }
           }
         } else {
           console.warn(
@@ -649,6 +642,9 @@ client.once("clientReady", async () => {
         const timeout = setTimeout(async () => {
           try {
             const channel = await getChannel(t.channelId);
+            const participantsText = participantsArr
+              .map((id) => `<@${id}>`)
+              .join(" ");
             if (channel && channel.isTextBased && canSendInChannel(channel)) {
               if (t.messageId) {
                 const orig = await channel.messages
@@ -656,33 +652,35 @@ client.once("clientReady", async () => {
                   .catch(() => null);
                 if (orig) {
                   await orig.edit({
-                    content: `⏰ <@${t.userId}>, your timer (${
+                    content: `⏰ ${participantsText} — Your timer (${
                       t.label ? `${t.label} - ` : ""
                     }${formatDuration(t.duration)}) ended!`,
                     components: [],
                   });
                 } else {
                   await channel.send(
-                    `⏰ <@${t.userId}>, your timer (${
+                    `⏰ ${participantsText} — Your timer (${
                       t.label ? `${t.label} - ` : ""
                     }${formatDuration(t.duration)}) ended!`
                   );
                 }
               } else {
                 await channel.send(
-                  `⏰ <@${t.userId}>, your timer (${
+                  `⏰ ${participantsText} — Your timer (${
                     t.label ? `${t.label} - ` : ""
                   }${formatDuration(t.duration)}) ended!`
                 );
               }
             } else {
               if (t.allowDM) {
-                const user = await client.users.fetch(t.userId);
-                await user.send(
-                  `⏰ Your timer (${
-                    t.label ? `${t.label} - ` : ""
-                  }${formatDuration(t.duration)}) ended!`
-                );
+                for (const uid of participantsSet) {
+                  const user = await client.users.fetch(uid);
+                  await user.send(
+                    `⏰ Your timer (${
+                      t.label ? `${t.label} - ` : ""
+                    }${formatDuration(t.duration)}) ended!`
+                  );
+                }
               } else {
                 console.warn(
                   `Channel unavailable for restored timer ${id} and DM fallback not allowed.`
@@ -705,7 +703,7 @@ client.once("clientReady", async () => {
           duration: t.duration,
           label: t.label,
           allowDM: !!t.allowDM,
-          broadcast: !!t.broadcast,
+          participants: new Set(t.participants || [t.userId]),
         });
       }
     }
@@ -718,6 +716,13 @@ client.once("clientReady", async () => {
         // If the session ended while offline, attempt to notify user and mark progressed
         try {
           const channel = await getChannel(p.channelId);
+          const pomParticipants =
+            p.participants && p.participants.length
+              ? p.participants
+              : [p.userId];
+          const participantsText = pomParticipants
+            .map((id) => `<@${id}>`)
+            .join(" ");
           if (channel && channel.isTextBased && canSendInChannel(channel)) {
             if (p.messageId) {
               const orig = await channel.messages
@@ -725,35 +730,27 @@ client.once("clientReady", async () => {
                 .catch(() => null);
               if (orig) {
                 await orig.edit({
-                  content: `⏰ <@${p.userId}>, your pomodoro session ${labelPrefix} progressed while I was offline.`,
+                  content: `⏰ ${participantsText}, your pomodoro session ${labelPrefix} progressed while I was offline.`,
                   components: [],
                 });
                 continue;
               }
             }
             await channel.send(
-              `⏰ <@${p.userId}>, your pomodoro session ${labelPrefix} progressed while I was offline.`
+              `⏰ ${participantsText}, your pomodoro session ${labelPrefix} progressed while I was offline.`
             );
             continue;
           }
         } catch (err) {
           console.warn(
-            `Could not notify user ${p.userId} for pomodoro ${id}:`,
+            `Could not notify participants for pomodoro ${id}:`,
             err
           );
         }
-        // Fallback DM
-        try {
-          const user = await client.users.fetch(p.userId);
-          await user.send(
-            `⏰ Your pomodoro session ${labelPrefix}progressed while I was offline.`
-          );
-        } catch (err) {
-          console.error(
-            `Failed to DM user ${p.userId} for pomodoro ${id}:`,
-            err
-          );
-        }
+        // Channel unavailable for restored pomodoro progression — do not send DMs per configuration
+        console.warn(
+          `Channel unavailable for restored pomodoro ${id}; not sending DM notifications.`
+        );
       } else {
         // Recreate timeout and restore state
         const timeout = setTimeout(async () => {
@@ -776,9 +773,15 @@ client.once("clientReady", async () => {
           endsAt: p.endsAt,
           label: p.label,
           allowDM: !!p.allowDM,
-          broadcast: !!p.broadcast,
           participants: new Set(p.participants || []),
         });
+
+        // start per-second updates for restored pomodoro
+        const restored = pomodoros.get(id);
+        restored.interval = setInterval(() => {
+          updatePomodoroMessage(id).catch(() => null);
+        }, 1000);
+        updatePomodoroMessage(id).catch(() => null);
       }
     }
 
@@ -1065,16 +1068,6 @@ client.on("interactionCreate", async (interaction) => {
           .setStyle(ButtonStyle.Danger)
       );
 
-      const broadcast = !!interaction.options.getBoolean("broadcast");
-
-      if (broadcast && !channelAccessible) {
-        return safeReply(interaction, {
-          content:
-            "❌ I don't have permission to post a channel-wide pomodoro here. Grant SendMessages/ViewChannel or omit `broadcast=true`.",
-          flags: EPHEMERAL,
-        });
-      }
-
       const participantsStr =
         interaction.options.getString("participants") || "";
       const parsed = parseParticipants(participantsStr);
@@ -1095,29 +1088,17 @@ client.on("interactionCreate", async (interaction) => {
 
       // create message
       const follow = await interaction.followUp({
-        content: broadcast
-          ? `🟢 @here Channel-wide pomodoro started ${
-              label ? `— ${label} ` : ""
-            }• Work: ${formatDuration(workDuration)} • Break: ${formatDuration(
-              breakDuration
-            )} • Cycles: ${cycles} \nCycle 1/${cycles} — Work (${formatDuration(
-              workDuration
-            )}) • Cycle time left: ${formatDuration(
-              workDuration
-            )} • Total time left: ${formatDuration(totalRemaining)}${
-              participantsText ? `\nParticipants: ${participantsText}` : ""
-            }`
-          : `🟢 Pomodoro started ${
-              label ? `— ${label} ` : ""
-            }• Work: ${formatDuration(workDuration)} • Break: ${formatDuration(
-              breakDuration
-            )} • Cycles: ${cycles} \nCycle 1/${cycles} — Work (${formatDuration(
-              workDuration
-            )}) • Cycle time left: ${formatDuration(
-              workDuration
-            )} • Total time left: ${formatDuration(totalRemaining)}${
-              participantsText ? `\nParticipants: ${participantsText}` : ""
-            }`,
+        content: `🟢 Pomodoro started ${
+          label ? `— ${label} ` : ""
+        }• Work: ${formatDuration(workDuration)} • Break: ${formatDuration(
+          breakDuration
+        )} • Cycles: ${cycles} \nCycle 1/${cycles} — Work (${formatDuration(
+          workDuration
+        )}) • Cycle time left: ${formatDuration(
+          workDuration
+        )} • Total time left: ${formatDuration(totalRemaining)}${
+          participantsText ? `\nParticipants: ${participantsText}` : ""
+        }`,
         components: [row],
       });
 
@@ -1141,9 +1122,16 @@ client.on("interactionCreate", async (interaction) => {
         breakDuration,
         endsAt,
         label,
-        allowDM,
-        broadcast,
+        allowDM: !!allowDM,
+        participants: participantsSet,
       });
+
+      // start per-second updates and update immediately
+      const created = pomodoros.get(id);
+      created.interval = setInterval(() => {
+        updatePomodoroMessage(id).catch(() => null);
+      }, 1000);
+      updatePomodoroMessage(id).catch(() => null);
 
       await persist();
       return;
@@ -1166,6 +1154,7 @@ client.on("interactionCreate", async (interaction) => {
           flags: EPHEMERAL,
         });
       clearTimeout(p.timeout);
+      if (p.interval) clearInterval(p.interval);
 
       addHistory({
         id: p.messageId || id || `${Date.now().toString(36)}_pstop`,
@@ -1318,16 +1307,6 @@ client.on("interactionCreate", async (interaction) => {
       });
     }
 
-    const broadcast = !!interaction.options.getBoolean("broadcast");
-
-    if (broadcast && !channelAccessible) {
-      return safeReply(interaction, {
-        content:
-          "❌ I don't have permission to post a channel-wide timer here. Grant SendMessages/ViewChannel or omit `broadcast=true`.",
-        flags: EPHEMERAL,
-      });
-    }
-
     await interaction.deferReply();
 
     const id = Date.now().toString(36);
@@ -1340,6 +1319,11 @@ client.on("interactionCreate", async (interaction) => {
         .setStyle(ButtonStyle.Danger)
     );
 
+    const participantsStr = interaction.options.getString("participants") || "";
+    const parsed = parseParticipants(participantsStr);
+    if (parsed.length === 0) parsed.push(interaction.user.id);
+    const participantsSet = new Set(parsed);
+
     let messageId = null;
     const timeout = setTimeout(async () => {
       console.log(`⏰ Timer ${id} fired for ${userId} in channel ${channelId}`);
@@ -1347,20 +1331,18 @@ client.on("interactionCreate", async (interaction) => {
       try {
         const channel = await getChannel(channelId);
 
-        // Build content that announces channel-wide timers differently
-        const content = broadcast
-          ? `⏰ @here ${labelPrefix}Channel-wide timer started by <@${userId}> (${formatDuration(
-              duration
-            )}) ended!`
-          : `⏰ <@${userId}>, your timer (${labelPrefix}${formatDuration(
-              duration
-            )}) ended!`;
+        const participantsText = [...participantsSet]
+          .map((id) => `<@${id}>`)
+          .join(" ");
+        const content = `⏰ ${participantsText} — ${labelPrefix}Timer (${formatDuration(
+          duration
+        )}) ended!`;
 
-        // Use sendNotification helper which handles edit/send and DM fallback
+        // Use sendNotification helper which handles edit/send (no single-user DM fallback)
         const res = await sendNotification({
           channelId,
           messageId,
-          userId: broadcast ? null : userId,
+          userId: null,
           content,
           components: [],
           allowDM,
@@ -1368,26 +1350,50 @@ client.on("interactionCreate", async (interaction) => {
 
         if (res.channel)
           console.log(`⏰ Timer ${id} delivered in channel ${channelId}`);
-        else if (res.dm) console.log(`Sent DM to ${userId} for timer ${id}`);
+        else if (res.dm) console.log(`Sent DM for timer ${id}`);
         else
           console.warn(
             `Could not deliver timer ${id} (no channel access and DM not allowed).`
           );
+
+        // If DM fallback is allowed, DM all participants individually
+        if (!res.channel && allowDM) {
+          for (const uid of participantsSet) {
+            try {
+              const user = await client.users.fetch(uid).catch(() => null);
+              if (user)
+                await user
+                  .send(
+                    `⏰ Your timer (${labelPrefix}${formatDuration(
+                      duration
+                    )}) ended!`
+                  )
+                  .catch(() => null);
+            } catch (err) {
+              console.warn(
+                `Failed to DM participant ${uid} for timer ${id}:`,
+                err
+              );
+            }
+          }
+        }
       } catch (err) {
         console.error("Failed to send timer message:", err);
       } finally {
-        addHistory({
-          id,
-          userId,
-          channelId,
-          duration,
-          label: label || null,
-          type: "timer",
-          endedAt: Date.now(),
-          canceled: false,
-        });
-        // Increment totals for completed timers (fair competition — only count completed run time)
-        totals.set(userId, (totals.get(userId) || 0) + duration);
+        // Record history and increment totals for each participant
+        for (const uid of participantsSet) {
+          addHistory({
+            id,
+            userId: uid,
+            channelId,
+            duration,
+            label: label || null,
+            type: "timer",
+            endedAt: Date.now(),
+            canceled: false,
+          });
+          totals.set(uid, (totals.get(uid) || 0) + duration);
+        }
         timers.delete(id);
         await persist();
       }
@@ -1404,10 +1410,14 @@ client.on("interactionCreate", async (interaction) => {
       ).toISOString()}`
     );
 
+    const participantsText = [...participantsSet]
+      .map((id) => `<@${id}>`)
+      .join(" ");
+
     const follow = await interaction.followUp({
-      content: broadcast
-        ? `✅ Channel-wide timer started by <@${userId}> for ${timeStr}`
-        : `✅ Timer started for ${timeStr}`,
+      content: `✅ Timer started for ${timeStr}${
+        participantsText ? ` — Participants: ${participantsText}` : ""
+      }`,
       components: [row],
     });
 
@@ -1423,7 +1433,7 @@ client.on("interactionCreate", async (interaction) => {
       duration,
       label,
       allowDM,
-      broadcast,
+      participants: participantsSet,
     });
     await persist();
   }
@@ -1442,16 +1452,22 @@ client.on("interactionCreate", async (interaction) => {
       return safeReply(interaction, "❌ Timer not found or not yours.");
     clearTimeout(timer.timeout);
 
-    addHistory({
-      id,
-      userId: timer.userId,
-      channelId: timer.channelId,
-      duration: timer.duration,
-      label: timer.label || null,
-      type: "timer",
-      endedAt: Date.now(),
-      canceled: true,
-    });
+    // Record canceled entry for each participant
+    const canceledParticipants = timer.participants
+      ? [...timer.participants]
+      : [timer.userId];
+    for (const uid of canceledParticipants) {
+      addHistory({
+        id,
+        userId: uid,
+        channelId: timer.channelId,
+        duration: timer.duration,
+        label: timer.label || null,
+        type: "timer",
+        endedAt: Date.now(),
+        canceled: true,
+      });
+    }
 
     timers.delete(id);
 
@@ -1606,14 +1622,11 @@ client.on("interactionCreate", async (interaction) => {
                 components: [],
               });
           }
-        } else if (p.allowDM) {
-          const user = await client.users.fetch(p.userId).catch(() => null);
-          if (user)
-            await user
-              .send(
-                `🧹 Your pomodoro (${p.label || ""}) was reset by the owner.`
-              )
-              .catch(() => null);
+        } else {
+          // Channel unavailable for reset notification — do not send DMs per configuration
+          console.warn(
+            `Channel unavailable for pomodoro ${id} reset; not sending DM notifications.`
+          );
         }
       } catch (err) {
         console.warn(`Failed to reset pomodoro ${id}:`, err);
@@ -1639,7 +1652,7 @@ client.on("interactionCreate", async (interaction) => {
   if (sub === "help") {
     return safeReply(interaction, {
       content:
-        "Usage:\n/timer start time:<10s|5m|1h|1:30|1h30m> [label] [allow_dm:true|false] [broadcast:true|false]\n/timer cancel id:<id>\n/timer list\n/timer reset\n/timer stats [timeframe: all|today|week]\n/timer pomodoro start work:<25m> break:<5m> cycles:<4> [label] [allow_dm:true|false] [broadcast:true|false]",
+        "Usage:\n/timer start time:<10s|5m|1h|1:30|1h30m> [label] [allow_dm:true|false] [participants:@alice @bob]\n/timer cancel id:<id>\n/timer list\n/timer reset\n/timer stats [timeframe: all|today|week]\n/timer pomodoro start work:<25m> break:<5m> cycles:<4> [label] [allow_dm:true|false] [participants:@alice @bob]",
       flags: EPHEMERAL,
     });
   }

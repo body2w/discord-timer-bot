@@ -26,11 +26,11 @@ const command = new SlashCommandBuilder()
           .setDescription("Allow DM fallback if I can't post in the channel")
           .setRequired(false)
       )
-      .addBooleanOption((opt) =>
+      .addStringOption((opt) =>
         opt
-          .setName("broadcast")
+          .setName("participants")
           .setDescription(
-            "Make this timer channel-wide (announces to the channel)"
+            "Mentions of users to notify for this timer (e.g., @alice @bob)"
           )
           .setRequired(false)
       )
@@ -144,14 +144,6 @@ const command = new SlashCommandBuilder()
               .setName("allow_dm")
               .setDescription(
                 "Allow DM fallback if I can't post in the channel"
-              )
-              .setRequired(false)
-          )
-          .addBooleanOption((opt) =>
-            opt
-              .setName("broadcast")
-              .setDescription(
-                "Make this pomodoro channel-wide (announces to the channel)"
               )
               .setRequired(false)
           )

@@ -6,7 +6,7 @@ A Discord timer & Pomodoro bot built with discord.js.
 
 ## 🚀 Features
 
-**Overview:** The bot supports one-off timers and multi-cycle Pomodoros, with persistent storage, per-guild authorization for administrative actions, channel-wide broadcasts, DM fallbacks, and per-user accounting for completed work.
+**Overview:** The bot supports one-off timers and multi-cycle Pomodoros, with persistent storage, per-guild authorization for administrative actions, per-user notifications, DM fallbacks, and per-user accounting for completed work.
 
 ### Commands
 
@@ -15,7 +15,7 @@ A Discord timer & Pomodoro bot built with discord.js.
   - Options:
     - `label` — short text label for the timer
     - `allow_dm` — boolean; allow DM fallback when the bot can't post to the channel
-    - `broadcast` — boolean; announce to the channel with `@here` (requires send permissions)
+  - `participants` — space-separated mentions or IDs (e.g., `@alice @bob`); the command issuer is used by default if none provided
 
 - **/timer cancel id:<id>** — Cancel a timer. Owners/authorized users can cancel any timer; regular users can cancel their own.
 
@@ -36,7 +36,7 @@ A Discord timer & Pomodoro bot built with discord.js.
   - Options:
     - `label` — short label for the pomodoro
     - `allow_dm` — send participant DMs when channel posting is unavailable or when configured
-    - `broadcast` — announce cycles and completions `@here` in the channel
+    - `participants` — space-separated mentions or IDs (e.g., `@alice @bob`); the command issuer is automatically included
     - `participants` — space-separated mentions or IDs (e.g., `@alice @bob`); the command issuer is automatically included
 
 - **/timer pomodoro stop [id]** — Stop a Pomodoro (owner/authorized may stop others)
@@ -57,7 +57,7 @@ A Discord timer & Pomodoro bot built with discord.js.
   - If `allow_dm` is set (or channel posting is unavailable), the bot will send DMs to participants notifying them of work/break starts and completion.
   - The participants list is persisted on the pomodoro object and can be viewed with ` /timer pomodoro participants`.
 
-- **Broadcasts:** `broadcast=true` makes messages channel-wide announcements that include `@here` (requires the bot to have ViewChannel/SendMessages and the ability to mention `@here`). If the bot lacks channel permissions and `allow_dm` is not set, the command is rejected.
+- **Notifications:** Mentioned `participants` are included in channel messages; if the bot lacks channel permissions and `allow_dm` is not set, the command is rejected and the user should enable `allow_dm` so participants can be notified by DM.
 
 - **Permission model:**
 
@@ -124,7 +124,7 @@ node tests/run-tests.js
 ## Examples
 
 - Start a personal timer: ` /timer start time:10m label:Study`
-- Start a channel-wide timer: ` /timer start time:15m broadcast:true`
+- Start a timer for specific users: ` /timer start time:15m participants:@alice @bob`
 - Start a pomodoro with participants and DM notifications: ` /timer pomodoro start work:25m break:5m cycles:4 participants:@alice @bob allow_dm:true label:Focus`
 - Show pomodoro participants (if you're in the session or authorized): ` /timer pomodoro participants`
 - Authorize a user (owner only): ` /timer manage authorize user:@alice`
