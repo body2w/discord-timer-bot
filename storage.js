@@ -13,17 +13,30 @@ export async function loadState() {
       totals: state.totals || {},
       pomodoros: state.pomodoros || {},
       history: state.history || [],
+      allowedResetters: state.allowedResetters || {},
     };
   } catch (err) {
     if (err.code === "ENOENT")
-      return { timers: {}, totals: {}, pomodoros: {}, history: [] };
+      return {
+        timers: {},
+        totals: {},
+        pomodoros: {},
+        history: [],
+        allowedResetters: {},
+      };
     console.error("Failed to load state, backing up and starting fresh:", err);
     try {
       await fs.copyFile(DATA_FILE, `${DATA_FILE}.bak`);
     } catch (copyErr) {
       // ignore
     }
-    return { timers: {}, totals: {}, pomodoros: {}, history: [] };
+    return {
+      timers: {},
+      totals: {},
+      pomodoros: {},
+      history: [],
+      allowedResetters: {},
+    };
   }
 }
 
@@ -33,6 +46,7 @@ export async function saveState(state) {
     totals: state.totals || {},
     pomodoros: state.pomodoros || {},
     history: state.history || [],
+    allowedResetters: state.allowedResetters || {},
     savedAt: new Date().toISOString(),
   };
 

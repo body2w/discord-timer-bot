@@ -26,6 +26,14 @@ const command = new SlashCommandBuilder()
           .setDescription("Allow DM fallback if I can't post in the channel")
           .setRequired(false)
       )
+      .addBooleanOption((opt) =>
+        opt
+          .setName("broadcast")
+          .setDescription(
+            "Make this timer channel-wide (announces to the channel)"
+          )
+          .setRequired(false)
+      )
   )
   .addSubcommand((sub) =>
     sub
@@ -55,7 +63,44 @@ const command = new SlashCommandBuilder()
       )
   )
   .addSubcommand((sub) =>
+    sub
+      .setName("reset")
+      .setDescription("Reset all active timers and pomodoros (owner only)")
+  )
+  .addSubcommand((sub) =>
     sub.setName("help").setDescription("Show usage help for /timer")
+  )
+  .addSubcommandGroup((group) =>
+    group
+      .setName("manage")
+      .setDescription("Owner-only management commands")
+      .addSubcommand((sub) =>
+        sub
+          .setName("authorize")
+          .setDescription("Authorize a user to reset timers in this guild")
+          .addUserOption((opt) =>
+            opt
+              .setName("user")
+              .setDescription("User to authorize")
+              .setRequired(true)
+          )
+      )
+      .addSubcommand((sub) =>
+        sub
+          .setName("revoke")
+          .setDescription("Revoke reset authorization for a user in this guild")
+          .addUserOption((opt) =>
+            opt
+              .setName("user")
+              .setDescription("User to revoke")
+              .setRequired(true)
+          )
+      )
+      .addSubcommand((sub) =>
+        sub
+          .setName("list")
+          .setDescription("List authorized resetters in this guild")
+      )
   )
   .addSubcommandGroup((group) =>
     group
@@ -93,6 +138,14 @@ const command = new SlashCommandBuilder()
               .setName("allow_dm")
               .setDescription(
                 "Allow DM fallback if I can't post in the channel"
+              )
+              .setRequired(false)
+          )
+          .addBooleanOption((opt) =>
+            opt
+              .setName("broadcast")
+              .setDescription(
+                "Make this pomodoro channel-wide (announces to the channel)"
               )
               .setRequired(false)
           )

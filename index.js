@@ -15,6 +15,8 @@ const timers = new Map();
 const totals = new Map();
 const pomodoros = new Map();
 const history = [];
+// Per-guild map of authorized user IDs allowed to run reset
+const allowedResetters = new Map();
 const REQUIRED_PERMS = 67584n;
 
 function canSendInChannel(channel) {
@@ -31,6 +33,23 @@ function canSendInChannel(channel) {
     }
     // Fallback to bitmask comparison
     return (BigInt(perms.bitfield) & REQUIRED_PERMS) === REQUIRED_PERMS;
+  } catch (e) {
+    return false;
+  }
+}
+
+function hasManagePermissions(interaction) {
+  try {
+    const perms = interaction.member?.permissions;
+    if (!perms) return false;
+    if (typeof perms.has === "function") {
+      return perms.has([
+        PermissionFlagsBits.ManageChannels,
+        PermissionFlagsBits.ManageGuild,
+        PermissionFlagsBits.Administrator,
+      ]);
+    }
+    return false;
   } catch (e) {
     return false;
   }
@@ -183,6 +202,7 @@ async function persist() {
       duration: t.duration,
       label: t.label || null,
       allowDM: !!t.allowDM,
+      broadcast: !!t.broadcast,
     };
   }
   const plainTotals = {};
@@ -200,13 +220,23 @@ async function persist() {
       breakDuration: p.breakDuration,
       endsAt: p.endsAt,
       label: p.label || null,
+      allowDM: !!p.allowDM,
+      broadcast: !!p.broadcast,
     };
   }
+
+  // Serialize allowedResetters as plain object guildId -> [userId...]
+  const plainAllowedResetters = {};
+  for (const [gid, set] of allowedResetters.entries()) {
+    plainAllowedResetters[gid] = [...set];
+  }
+
   await saveState({
     timers: plainTimers,
     totals: plainTotals,
     pomodoros: plainPomos,
     history: history.slice(),
+    allowedResetters: plainAllowedResetters,
   });
 }
 
@@ -262,17 +292,25 @@ async function handlePomodoroTick(id) {
       computePomodoroTotals(p);
 
     try {
+      const content = p.broadcast
+        ? `⏰ @here ${labelPrefix}Work session complete. Break started — ${formatDuration(
+            p.breakDuration
+          )}. Cycle time left: ${formatDuration(
+            cycleRemaining
+          )} • Total time left: ${formatDuration(totalRemaining)}.`
+        : `⏰ ${labelPrefix}<@${
+            p.userId
+          }>, work session complete. Break started — ${formatDuration(
+            p.breakDuration
+          )}. Cycle time left: ${formatDuration(
+            cycleRemaining
+          )} • Total time left: ${formatDuration(totalRemaining)}.`;
+
       const res = await sendNotification({
         channelId: p.channelId,
         messageId: p.messageId,
-        userId: p.userId,
-        content: `⏰ ${labelPrefix}<@${
-          p.userId
-        }>, work session complete. Break started — ${formatDuration(
-          p.breakDuration
-        )}. Cycle time left: ${formatDuration(
-          cycleRemaining
-        )} • Total time left: ${formatDuration(totalRemaining)}.`,
+        userId: p.broadcast ? null : p.userId,
+        content,
         components: p.messageId ? undefined : p.messageId?.components || [],
         allowDM: !!p.allowDM,
       });
@@ -312,12 +350,16 @@ async function handlePomodoroTick(id) {
             : null;
           if (msg)
             await msg.edit({
-              content: `✅ ${labelPrefix}<@${p.userId}>, pomodoro completed! (${p.totalCycles} cycles)`,
+              content: p.broadcast
+                ? `✅ @here ${labelPrefix}Pomodoro completed! (${p.totalCycles} cycles)`
+                : `✅ ${labelPrefix}<@${p.userId}>, pomodoro completed! (${p.totalCycles} cycles)`,
               components: [],
             });
           else
             await channel.send(
-              `✅ ${labelPrefix}<@${p.userId}>, pomodoro completed! (${p.totalCycles} cycles)`
+              p.broadcast
+                ? `✅ @here ${labelPrefix}Pomodoro completed! (${p.totalCycles} cycles)`
+                : `✅ ${labelPrefix}<@${p.userId}>, pomodoro completed! (${p.totalCycles} cycles)`
             );
         } else {
           if (p.allowDM) {
@@ -358,24 +400,40 @@ async function handlePomodoroTick(id) {
           : null;
         if (msg)
           await msg.edit({
-            content: `🟢 ${labelPrefix}Cycle ${cycle}/${
-              p.totalCycles
-            } — Work started (${formatDuration(
-              p.workDuration
-            )}) • Cycle time left: ${formatDuration(
-              cycleRemaining
-            )} • Total time left: ${formatDuration(totalRemaining)}`,
+            content: p.broadcast
+              ? `🟢 @here ${labelPrefix}Cycle ${cycle}/${
+                  p.totalCycles
+                } — Work started (${formatDuration(
+                  p.workDuration
+                )}) • Cycle time left: ${formatDuration(
+                  cycleRemaining
+                )} • Total time left: ${formatDuration(totalRemaining)}`
+              : `🟢 ${labelPrefix}Cycle ${cycle}/${
+                  p.totalCycles
+                } — Work started (${formatDuration(
+                  p.workDuration
+                )}) • Cycle time left: ${formatDuration(
+                  cycleRemaining
+                )} • Total time left: ${formatDuration(totalRemaining)}`,
             components: msg.components,
           });
         else
           await channel.send(
-            `🟢 ${labelPrefix}Cycle ${cycle}/${
-              p.totalCycles
-            } — Work started (${formatDuration(
-              p.workDuration
-            )}) • Cycle time left: ${formatDuration(
-              cycleRemaining
-            )} • Total time left: ${formatDuration(totalRemaining)}`
+            p.broadcast
+              ? `🟢 @here ${labelPrefix}Cycle ${cycle}/${
+                  p.totalCycles
+                } — Work started (${formatDuration(
+                  p.workDuration
+                )}) • Cycle time left: ${formatDuration(
+                  cycleRemaining
+                )} • Total time left: ${formatDuration(totalRemaining)}`
+              : `🟢 ${labelPrefix}Cycle ${cycle}/${
+                  p.totalCycles
+                } — Work started (${formatDuration(
+                  p.workDuration
+                )}) • Cycle time left: ${formatDuration(
+                  cycleRemaining
+                )} • Total time left: ${formatDuration(totalRemaining)}`
           );
       } else {
         if (p.allowDM) {
@@ -550,6 +608,7 @@ client.once("clientReady", async () => {
           duration: t.duration,
           label: t.label,
           allowDM: !!t.allowDM,
+          broadcast: !!t.broadcast,
         });
       }
     }
@@ -619,8 +678,15 @@ client.once("clientReady", async () => {
           breakDuration: p.breakDuration,
           endsAt: p.endsAt,
           label: p.label,
+          allowDM: !!p.allowDM,
+          broadcast: !!p.broadcast,
         });
       }
+    }
+
+    // Restore allowed resetters per guild
+    for (const [gid, arr] of Object.entries(state.allowedResetters || {})) {
+      allowedResetters.set(gid, new Set(arr || []));
     }
 
     console.log(
@@ -638,9 +704,14 @@ client.on("interactionCreate", async (interaction) => {
     if (interaction.customId.startsWith("cancel_")) {
       const id = interaction.customId.split("_")[1];
       const timer = timers.get(id);
-      if (!timer || timer.userId !== interaction.user.id)
+      if (
+        !timer ||
+        (timer.userId !== interaction.user.id &&
+          !hasManagePermissions(interaction))
+      )
         return safeReply(interaction, {
-          content: "❌ Timer not found or not yours",
+          content:
+            "❌ Timer not found or not yours (or you lack permission to cancel)",
           flags: EPHEMERAL,
         });
       clearTimeout(timer.timeout);
@@ -687,7 +758,10 @@ client.on("interactionCreate", async (interaction) => {
     if (interaction.customId.startsWith("pomodoro_stop_")) {
       const id = interaction.customId.split("_")[2];
       const p = pomodoros.get(id);
-      if (!p || p.userId !== interaction.user.id)
+      if (
+        !p ||
+        (p.userId !== interaction.user.id && !hasManagePermissions(interaction))
+      )
         return safeReply(interaction, {
           content: "❌ Pomodoro not found or not yours",
           flags: EPHEMERAL,
@@ -740,6 +814,79 @@ client.on("interactionCreate", async (interaction) => {
     return;
   const group = interaction.options.getSubcommandGroup?.();
   const sub = interaction.options.getSubcommand();
+
+  if (group === "manage") {
+    const ms = sub; // authorize|revoke|list
+    if (interaction.user.id !== OWNER_ID)
+      return safeReply(interaction, {
+        content: "❌ Only the bot owner can manage authorizations.",
+        flags: EPHEMERAL,
+      });
+    if (!interaction.guildId)
+      return safeReply(interaction, {
+        content:
+          "❌ Authorization is guild-scoped and must be run in a server.",
+        flags: EPHEMERAL,
+      });
+
+    const guildId = interaction.guildId;
+
+    if (ms === "authorize") {
+      const u = interaction.options.getUser("user");
+      if (!u)
+        return safeReply(interaction, {
+          content: "❌ Please provide a valid user to authorize.",
+          flags: EPHEMERAL,
+        });
+      const set = allowedResetters.get(guildId) || new Set();
+      set.add(u.id);
+      allowedResetters.set(guildId, set);
+      await persist();
+      return safeReply(interaction, {
+        content: `✅ Authorized <@${u.id}> to reset timers in this guild.`,
+        flags: EPHEMERAL,
+      });
+    }
+
+    if (ms === "revoke") {
+      const u = interaction.options.getUser("user");
+      if (!u)
+        return safeReply(interaction, {
+          content: "❌ Please provide a valid user to revoke.",
+          flags: EPHEMERAL,
+        });
+      const set = allowedResetters.get(guildId);
+      if (!set || !set.has(u.id))
+        return safeReply(interaction, {
+          content: `ℹ️ <@${u.id}> is not authorized in this guild.`,
+          flags: EPHEMERAL,
+        });
+      set.delete(u.id);
+      if (set.size === 0) allowedResetters.delete(guildId);
+      else allowedResetters.set(guildId, set);
+      await persist();
+      return safeReply(interaction, {
+        content: `✅ Revoked reset authorization for <@${u.id}> in this guild.`,
+        flags: EPHEMERAL,
+      });
+    }
+
+    if (ms === "list") {
+      const set = allowedResetters.get(guildId);
+      if (!set || set.size === 0)
+        return safeReply(interaction, {
+          content: "📭 No authorized resetters in this guild.",
+          flags: EPHEMERAL,
+        });
+      const lines = [...set].map((id) => `<@${id}>`).join("\n");
+      return safeReply(interaction, {
+        content: `📋 Authorized resetters in this guild:\n${lines}`,
+        flags: EPHEMERAL,
+      });
+    }
+
+    return;
+  }
 
   if (group === "pomodoro") {
     const ps = sub; // start|stop|status
@@ -816,6 +963,16 @@ client.on("interactionCreate", async (interaction) => {
           .setStyle(ButtonStyle.Danger)
       );
 
+      const broadcast = !!interaction.options.getBoolean("broadcast");
+
+      if (broadcast && !channelAccessible) {
+        return safeReply(interaction, {
+          content:
+            "❌ I don't have permission to post a channel-wide pomodoro here. Grant SendMessages/ViewChannel or omit `broadcast=true`.",
+          flags: EPHEMERAL,
+        });
+      }
+
       const now = Date.now();
       const endsAt = now + workDuration;
 
@@ -823,15 +980,25 @@ client.on("interactionCreate", async (interaction) => {
 
       // create message
       const follow = await interaction.followUp({
-        content: `🟢 Pomodoro started ${
-          label ? `— ${label} ` : ""
-        }• Work: ${formatDuration(workDuration)} • Break: ${formatDuration(
-          breakDuration
-        )} • Cycles: ${cycles} \nCycle 1/${cycles} — Work (${formatDuration(
-          workDuration
-        )}) • Cycle time left: ${formatDuration(
-          workDuration
-        )} • Total time left: ${formatDuration(totalRemaining)}`,
+        content: broadcast
+          ? `🟢 @here Channel-wide pomodoro started ${
+              label ? `— ${label} ` : ""
+            }• Work: ${formatDuration(workDuration)} • Break: ${formatDuration(
+              breakDuration
+            )} • Cycles: ${cycles} \nCycle 1/${cycles} — Work (${formatDuration(
+              workDuration
+            )}) • Cycle time left: ${formatDuration(
+              workDuration
+            )} • Total time left: ${formatDuration(totalRemaining)}`
+          : `🟢 Pomodoro started ${
+              label ? `— ${label} ` : ""
+            }• Work: ${formatDuration(workDuration)} • Break: ${formatDuration(
+              breakDuration
+            )} • Cycles: ${cycles} \nCycle 1/${cycles} — Work (${formatDuration(
+              workDuration
+            )}) • Cycle time left: ${formatDuration(
+              workDuration
+            )} • Total time left: ${formatDuration(totalRemaining)}`,
         components: [row],
       });
 
@@ -856,6 +1023,7 @@ client.on("interactionCreate", async (interaction) => {
         endsAt,
         label,
         allowDM,
+        broadcast,
       });
 
       await persist();
@@ -870,7 +1038,10 @@ client.on("interactionCreate", async (interaction) => {
         p = [...pomodoros.values()].find(
           (x) => x.userId === interaction.user.id
         );
-      if (!p || p.userId !== interaction.user.id)
+      if (
+        !p ||
+        (p.userId !== interaction.user.id && !hasManagePermissions(interaction))
+      )
         return interaction.reply({
           content: "❌ Pomodoro not found or not yours.",
           flags: EPHEMERAL,
@@ -990,6 +1161,16 @@ client.on("interactionCreate", async (interaction) => {
       });
     }
 
+    const broadcast = !!interaction.options.getBoolean("broadcast");
+
+    if (broadcast && !channelAccessible) {
+      return safeReply(interaction, {
+        content:
+          "❌ I don't have permission to post a channel-wide timer here. Grant SendMessages/ViewChannel or omit `broadcast=true`.",
+        flags: EPHEMERAL,
+      });
+    }
+
     await interaction.deferReply();
 
     const id = Date.now().toString(36);
@@ -1009,14 +1190,21 @@ client.on("interactionCreate", async (interaction) => {
       try {
         const channel = await getChannel(channelId);
 
+        // Build content that announces channel-wide timers differently
+        const content = broadcast
+          ? `⏰ @here ${labelPrefix}Channel-wide timer started by <@${userId}> (${formatDuration(
+              duration
+            )}) ended!`
+          : `⏰ <@${userId}>, your timer (${labelPrefix}${formatDuration(
+              duration
+            )}) ended!`;
+
         // Use sendNotification helper which handles edit/send and DM fallback
         const res = await sendNotification({
           channelId,
           messageId,
-          userId,
-          content: `⏰ <@${userId}>, your timer (${labelPrefix}${formatDuration(
-            duration
-          )}) ended!`,
+          userId: broadcast ? null : userId,
+          content,
           components: [],
           allowDM,
         });
@@ -1056,7 +1244,9 @@ client.on("interactionCreate", async (interaction) => {
     );
 
     const follow = await interaction.followUp({
-      content: `✅ Timer started for ${timeStr}`,
+      content: broadcast
+        ? `✅ Channel-wide timer started by <@${userId}> for ${timeStr}`
+        : `✅ Timer started for ${timeStr}`,
       components: [row],
     });
 
@@ -1072,6 +1262,7 @@ client.on("interactionCreate", async (interaction) => {
       duration,
       label,
       allowDM,
+      broadcast,
     });
     await persist();
   }
@@ -1079,7 +1270,11 @@ client.on("interactionCreate", async (interaction) => {
   if (sub === "cancel") {
     const id = interaction.options.getString("id");
     const timer = timers.get(id);
-    if (!timer || timer.userId !== interaction.user.id)
+    if (
+      !timer ||
+      (timer.userId !== interaction.user.id &&
+        !hasManagePermissions(interaction))
+    )
       return safeReply(interaction, "❌ Timer not found or not yours.");
     clearTimeout(timer.timeout);
 
@@ -1138,10 +1333,125 @@ client.on("interactionCreate", async (interaction) => {
     return safeReply(interaction, `📋 Your active timers:\n${text}`);
   }
 
+  if (sub === "reset") {
+    // Only allow OWNER_ID or an authorized user in this guild to run reset
+    const isOwner = OWNER_ID && interaction.user.id === OWNER_ID;
+    const isAuthorized =
+      interaction.guildId &&
+      allowedResetters.get(interaction.guildId)?.has(interaction.user.id);
+    if (!isOwner && !isAuthorized) {
+      return safeReply(interaction, {
+        content:
+          "❌ Only the bot owner or an authorized user can run this command.",
+        flags: EPHEMERAL,
+      });
+    }
+
+    // Cancel timers
+    for (const [id, t] of timers.entries()) {
+      try {
+        clearTimeout(t.timeout);
+        addHistory({
+          id,
+          userId: t.userId,
+          channelId: t.channelId,
+          duration: t.duration,
+          label: t.label || null,
+          type: "timer",
+          endedAt: Date.now(),
+          canceled: true,
+        });
+
+        // Try to update original message
+        if (t.messageId) {
+          const channel = await getChannel(t.channelId);
+          if (channel && channel.isTextBased) {
+            const msg = await channel.messages
+              .fetch(t.messageId)
+              .catch(() => null);
+            if (msg)
+              await msg.edit({
+                content: `🧹 Timer ${id} reset by <@${interaction.user.id}>`,
+                components: [],
+              });
+          }
+        } else if (t.allowDM) {
+          const user = await client.users.fetch(t.userId).catch(() => null);
+          if (user)
+            await user
+              .send(
+                `🧹 Your timer (${
+                  t.label ? t.label + " - " : ""
+                }${formatDuration(t.duration)}) was reset by the owner.`
+              )
+              .catch(() => null);
+        }
+      } catch (err) {
+        console.warn(`Failed to reset timer ${id}:`, err);
+      }
+    }
+
+    // Cancel pomodoros
+    for (const [id, p] of pomodoros.entries()) {
+      try {
+        clearTimeout(p.timeout);
+        addHistory({
+          id,
+          userId: p.userId,
+          channelId: p.channelId,
+          duration: 0,
+          label: p.label || null,
+          type: "pomodoro",
+          endedAt: Date.now(),
+          canceled: true,
+        });
+
+        if (p.messageId) {
+          const channel = await getChannel(p.channelId);
+          if (channel && channel.isTextBased) {
+            const msg = await channel.messages
+              .fetch(p.messageId)
+              .catch(() => null);
+            if (msg)
+              await msg.edit({
+                content: `🧹 Pomodoro ${id} reset by <@${interaction.user.id}>`,
+                components: [],
+              });
+          }
+        } else if (p.allowDM) {
+          const user = await client.users.fetch(p.userId).catch(() => null);
+          if (user)
+            await user
+              .send(
+                `🧹 Your pomodoro (${p.label || ""}) was reset by the owner.`
+              )
+              .catch(() => null);
+        }
+      } catch (err) {
+        console.warn(`Failed to reset pomodoro ${id}:`, err);
+      }
+    }
+
+    timers.clear();
+    pomodoros.clear();
+
+    // Clear aggregated totals and history (reset storage)
+    totals.clear();
+    history.splice(0, history.length);
+
+    await persist();
+
+    return safeReply(interaction, {
+      content:
+        "✅ All active timers and pomodoros have been reset and storage cleared.",
+      flags: EPHEMERAL,
+    });
+  }
+
   if (sub === "help") {
     return safeReply(interaction, {
       content:
-        "Usage:\n/timer start time:<10s|5m|1h|1:30|1h30m> [label] [allow_dm:true|false]\n/timer cancel id:<id>\n/timer list\n/timer stats [timeframe: all|today|week]\n/timer pomodoro start work:<25m> break:<5m> cycles:<4> [label] [allow_dm:true|false]",
+        "Usage:\n/timer start time:<10s|5m|1h|1:30|1h30m> [label] [allow_dm:true|false] [broadcast:true|false]\n/timer cancel id:<id>\n/timer list\n/timer reset\n/timer stats [timeframe: all|today|week]\n/timer pomodoro start work:<25m> break:<5m> cycles:<4> [label] [allow_dm:true|false] [broadcast:true|false]",
       flags: EPHEMERAL,
     });
   }
