@@ -379,14 +379,10 @@ async function handlePomodoroTick(id) {
 
       const channel = await getChannel(p.channelId);
       if (channel && channel.isTextBased && canSendInChannel(channel)) {
-        const msg = p.messageId
-          ? await channel.messages.fetch(p.messageId).catch(() => null)
-          : null;
-        if (msg)
-          await msg
-            .edit({ content, components: msg?.components || [] })
-            .catch(() => null);
-        else await channel.send(content).catch(() => null);
+        // Always send a new message for work->break notifications instead of editing
+        // the existing pomodoro status message. This avoids fetching/editing a
+        // possibly stale or inaccessible message which can cause the bot to freeze.
+        await channel.send(content).catch(() => null);
       } else {
         console.warn(
           `Channel unavailable for pomodoro ${id}; not sending DM notifications.`
