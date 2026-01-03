@@ -396,9 +396,10 @@ async function handlePomodoroTick(id) {
       const channel = await getChannel(p.channelId);
       if (channel && channel.isTextBased && canSendInChannel(channel)) {
         // Always send a new message for work->break notifications instead of editing
-        // the existing pomodoro status message. This avoids fetching/editing a
-        // possibly stale or inaccessible message which can cause the bot to freeze.
-        await channel.send(content).catch(() => null);
+        // the existing pomodoro status message. Save the sent message id so future
+        // updates will edit the latest status message instead of the stale one.
+        const sent = await channel.send(content).catch(() => null);
+        if (sent && sent.id) p.messageId = sent.id;
       } else {
         console.warn(
           `Channel unavailable for pomodoro ${id}; not sending DM notifications.`
@@ -458,9 +459,13 @@ async function handlePomodoroTick(id) {
             try {
               await msg.edit({ content, components: [] });
             } catch (err) {
-              await channel.send(content).catch(() => null);
+              const sent = await channel.send(content).catch(() => null);
+              if (sent && sent.id) p.messageId = sent.id;
             }
-          } else await channel.send(content).catch(() => null);
+          } else {
+            const sent = await channel.send(content).catch(() => null);
+            if (sent && sent.id) p.messageId = sent.id;
+          }
         } else {
           // Channel unavailable — do not send DMs for pomodoro events per configuration
           console.warn(
@@ -507,9 +512,13 @@ async function handlePomodoroTick(id) {
                 components: msg?.components,
               });
             } catch (err) {
-              await channel.send(workContent).catch(() => null);
+              const sent = await channel.send(workContent).catch(() => null);
+              if (sent && sent.id) p.messageId = sent.id;
             }
-          } else await channel.send(workContent).catch(() => null);
+          } else {
+            const sent = await channel.send(workContent).catch(() => null);
+            if (sent && sent.id) p.messageId = sent.id;
+          }
         } else {
           // Channel unavailable — do not send DMs for pomodoro events per configuration
           console.warn(
