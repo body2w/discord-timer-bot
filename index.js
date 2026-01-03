@@ -9,6 +9,7 @@ import {
 } from "discord.js";
 import { loadState, saveState } from "./storage.js";
 import { parseTime, formatDuration } from "./utils.js";
+import { recomputeTotalsFromHistory } from "./lib/totals.js";
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 const timers = new Map();
@@ -567,9 +568,13 @@ client.once("clientReady", async () => {
   // Load persisted state and reschedule timers
   try {
     const state = await loadState();
-    // Restore totals
+    // Restore totals from persistent totals if present
     for (const [uid, ms] of Object.entries(state.totals || {}))
       totals.set(uid, ms);
+    // Recompute totals from history to be authoritative (fair competition)
+    import("./lib/totals.js").then((m) =>
+      m.recomputeTotalsFromHistory(totals, state.history || [])
+    );
 
     // Restore history (cap to last 2000 entries)
     for (const h of state.history || []) history.push(h);
@@ -604,6 +609,8 @@ client.once("clientReady", async () => {
             endedAt: now,
             canceled: false,
           });
+          // Recompute totals now that we've appended history for an expired timer
+          recomputeTotalsFromHistory(totals, state.history || []);
           await persist();
 
           if (res.channel) continue;
@@ -1379,13 +1386,17 @@ client.on("interactionCreate", async (interaction) => {
           endedAt: Date.now(),
           canceled: false,
         });
+        // Increment totals for completed timers (fair competition — only count completed run time)
+        totals.set(userId, (totals.get(userId) || 0) + duration);
         timers.delete(id);
         await persist();
       }
     }, duration);
 
-    // Track total time the user has set across all timers
-    totals.set(userId, (totals.get(userId) || 0) + duration);
+    // We track completed work totals from history (fair competition).
+    // Do not increment totals when a timer is scheduled; totals are only
+    // incremented when timers fire (see below) or when pomodoro work completes.
+    // This prevents inflating totals with scheduled-but-not-completed time.
 
     console.log(
       `Started timer ${id} for ${userId} (${timeStr}) in channel ${channelId}, ends at ${new Date(

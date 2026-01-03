@@ -3,6 +3,7 @@ import { parseTime, formatDuration } from "../utils.js";
 import "./pomodoro-participants.test.js";
 import "./parse-participants.test.js";
 import "./storage-allowedResetters.test.js";
+import "./totals-recompute.test.js";
 
 console.log("Running tests...");
 
