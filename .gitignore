@@ -1,11 +1,5 @@
 .vercel
 node_modules
 .env
+# Runtime/persistent state (do not commit)
 timers-data.json
-timers-data.json.backup
-*.bak
-*.log
-npm-debug.log*
-.DS_Store
-.vscode/
-.idea/

@@ -1,284 +1,141 @@
-# Timer Bot v2.0
+# Timer Bot
 
-A clean, reliable Discord timer and Pomodoro bot built with discord.js.
+A Discord timer & Pomodoro bot built with discord.js.
 
-## Features
+---
 
-✅ **Simple and Reliable** - Rewritten from scratch with clean architecture  
-⏱️ **Timer Support** - Start timers with flexible time formats (10s, 5m, 1h, 1:30, etc.)  
-🍅 **Pomodoro Sessions** - Multi-cycle Pomodoro support with configurable work/break durations  
-💾 **Persistent Storage** - All timers and data are saved and restored on restart  
-👥 **Multi-Participant** - Add participants to timers and Pomodoros  
-📊 **Statistics & Leaderboard** - Track completed work time per user  
-🔐 **Permission System** - Owner-only and authorized resetter controls  
-✨ **No Spam** - Efficient message updates and minimal Discord API calls
+## 🚀 Features
 
-## Setup
+**Overview:** The bot supports one-off timers and multi-cycle Pomodoros, with persistent storage, per-guild authorization for administrative actions, per-user notifications, DM fallbacks, and per-user accounting for completed work.
 
-### 1. Prerequisites
+### Commands
 
-- Node.js 16 or higher
-- Discord Bot Token
-- Discord Application Client ID
+- **/timer start time:<...>** — Start a timer (supports `10s`, `5m`, `1h`, `1:30`, `1h30m`, etc.)
 
-### 2. Installation
+  - Options:
+    - `label` — short text label for the timer
+    - `allow_dm` — boolean; allow DM fallback when the bot can't post to the channel
+  - `participants` — space-separated mentions or IDs (e.g., `@alice @bob`); the command issuer is used by default if none provided
+
+- **/timer cancel id:<id>** — Cancel a timer. Owners/authorized users can cancel any timer; regular users can cancel their own.
+
+- **/timer list** — List timers. Owners/authorized see **all** active timers; regular users see only their own.
+
+- **/timer stats [timeframe: all|today|week] [global:true|false]** — Show completed run time totals. By default shows the caller's completed time (aggregated from history of ended timers and pomodoro work sessions). Set `global=true` to view a leaderboard (top users by completed time).
+
+- **/timer reset** — Reset all active timers and pomodoros and clear stored totals and history. This is restricted to the bot owner (`OWNER_ID`) or per-guild authorized users.
+
+- **/timer manage authorize|revoke|list** — Owner-only subcommands to manage per-guild authorized resetters:
+
+  - `authorize user:@id` — add an authorized resetter for the guild (persists across restarts)
+  - `revoke user:@id` — revoke authorization
+  - `list` — list authorized users in the guild
+
+- **/timer pomodoro start work:<...> break:<...> cycles:<n>** — Start a Pomodoro session with repeated cycles.
+
+  - Options:
+    - `label` — short label for the pomodoro
+    - `allow_dm` — send participant DMs when channel posting is unavailable or when configured
+    - `participants` — space-separated mentions or IDs (e.g., `@alice @bob`); the command issuer is automatically included
+    - `participants` — space-separated mentions or IDs (e.g., `@alice @bob`); the command issuer is automatically included
+
+- **/timer pomodoro stop [id]** — Stop a Pomodoro (owner/authorized may stop others)
+
+- **/timer pomodoro status** — Show your active Pomodoro's current cycle, cycle time left, and total time left (formatted in `H M S`)
+
+- **/timer pomodoro participants [id]** — Show the participant list for an active Pomodoro (owner/authorized may view all; participants can view their own sessions)
+
+### Behavior & Persistence
+
+- **Persistent storage:** The bot saves state to `timers-data.json` (atomic write). Persisted fields include active `timers`, `pomodoros`, per-user `totals`, `history`, and `allowedResetters` (per-guild authorized resetters).
+
+- **Human-friendly time formatting:** Durations are shown as `1h 2m 3s`, `5m 30s`, etc., both for cycle time left and total time left in Pomodoro messages.
+
+- **Pomodoro accounting & participant support:**
+
+  - When a pomodoro work session completes, each participant listed is credited with the actual work duration in the per-user totals and a history entry (type `pomodoro_work`) is recorded.
+  - If `allow_dm` is set (or channel posting is unavailable), the bot will send DMs to participants notifying them of work/break starts and completion.
+  - The participants list is persisted on the pomodoro object and can be viewed with ` /timer pomodoro participants`.
+
+- **Notifications:** Mentioned `participants` are included in channel messages; if the bot lacks channel permissions and `allow_dm` is not set, the command is rejected and the user should enable `allow_dm` so participants can be notified by DM.
+
+- **Permission model:**
+
+  - `OWNER_ID` (set via `.env`) is the primary owner with full access.
+  - The owner can grant per-guild reset privileges to other users via `/timer manage authorize`.
+  - Owners and authorized users can view the full timers list and cancel any timer; non-authorized users can only see/cancel their own timers.
+
+- **Reset semantics:** `/timer reset` cancels all active timers/pomodoros, records canceled entries in history, and clears aggregated totals and history from storage. This is a destructive operation—only allowed for the owner and per-guild authorized resetters.
+
+- **Buttons & interactions:** When possible the bot posts messages with buttons (e.g., cancel timer, stop pomodoro) for quick actions.
+
+---
+
+## ⚙️ Configuration & Environment
+
+Set required environment variables in `.env`:
+
+- `TOKEN` — Discord bot token
+- `CLIENT_ID` — Application client id (for registering global commands)
+- `OWNER_ID` — Your Discord user id (owner)
+- (optional) `ADMIN_CHANNEL_ID` — Channel to receive delivery/failure reports instead of DMs to owner
+
+After editing `.env`, restart the bot to pick up changes.
+
+---
+
+## 📦 Development
+
+1. Install dependencies:
 
 ```bash
 npm install
 ```
 
-### 3. Configuration
-
-Copy `.env.example` to `.env` and fill in your details:
+2. Register slash commands (run when you change command definitions):
 
 ```bash
-cp .env.example .env
+npm run deploy-commands
 ```
 
-Edit `.env`:
-
-```env
-DISCORD_TOKEN=your_token_here
-CLIENT_ID=your_client_id_here
-GUILD_ID=optional_guild_id_for_faster_testing
-OWNER_ID=your_discord_user_id
-```
-
-### 4. Deploy Commands
-
-Deploy slash commands to Discord:
-
-```bash
-npm run deploy
-```
-
-### 5. Start the Bot
+3. Run the bot:
 
 ```bash
 npm start
 ```
 
-## Commands
-
-### /timer start
-
-Start a timer with flexible time formats.
-
-```
-/timer start time:5m label:Work Pomodoro participants:@alice @bob allow_dm:true
-```
-
-**Options:**
-
-- `time` _(required)_ - Duration: `10s`, `5m`, `1h`, `1:30`, `1h30m`, etc.
-- `label` _(optional)_ - Description for the timer
-- `participants` _(optional)_ - Space-separated user mentions or IDs
-- `allow_dm` _(optional)_ - Allow DM notifications if channel is unavailable
-
-### /timer cancel
-
-Cancel an active timer.
-
-```
-/timer cancel id:1234567890_abc123
-```
-
-**Permissions:** Timer owner or authorized resetter
-
-### /timer list
-
-List all your active timers with remaining time.
-
-```
-/timer list
-```
-
-### /timer stats
-
-View your completed work statistics or a leaderboard.
-
-```
-/timer stats timeframe:all global:false
-/timer stats timeframe:today global:true
-```
-
-**Options:**
-
-- `timeframe` - `all`, `today`, or `week`
-- `global` - Show leaderboard if true
-
-### /timer reset
-
-Reset all timers and clear all history.
-
-```
-/timer reset
-```
-
-**Permissions:** Bot owner only
-
-### /timer manage
-
-Manage users authorized to reset timers.
-
-```
-/timer manage authorize user:@alice
-/timer manage revoke user:@alice
-/timer manage list
-```
-
-**Permissions:** Bot owner only
-
-### /pomodoro start
-
-Start a Pomodoro session with multiple cycles.
-
-```
-/pomodoro start work:25m break:5m cycles:4 label:Sprint participants:@alice @bob
-```
-
-**Options:**
-
-- `work` _(required)_ - Work phase duration
-- `break` _(required)_ - Break phase duration
-- `cycles` _(optional)_ - Number of cycles (1-100, default 4)
-- `label` _(optional)_ - Session label
-- `participants` _(optional)_ - Space-separated mentions
-- `allow_dm` _(optional)_ - Allow DM notifications
-
-### /pomodoro stop
-
-Stop an active Pomodoro session.
-
-```
-/pomodoro stop id:1234567890_abc123
-```
-
-**Permissions:** Session owner or authorized resetter
-
-### /pomodoro status
-
-Check your active Pomodoro's current status.
-
-```
-/pomodoro status
-```
-
-Shows:
-
-- Current cycle and total cycles
-- Whether you're in work or break phase
-- Time remaining in current phase
-- Total time remaining
-
-### /pomodoro participants
-
-View participants in a Pomodoro session.
-
-```
-/pomodoro participants id:1234567890_abc123
-```
-
-## Time Format Examples
-
-The bot supports flexible time input:
-
-```
-10s          → 10 seconds
-5m           → 5 minutes
-1h           → 1 hour
-1:30         → 1 minute 30 seconds (mm:ss format)
-1:30:45      → 1 hour 30 minutes 45 seconds (hh:mm:ss format)
-1h30m        → 1 hour 30 minutes
-2d 5h        → 2 days 5 hours
-90s          → 90 seconds
-1d           → 1 day
-```
-
-## Data Storage
-
-All bot data is stored in `timers-data.json`:
-
-- Active timers and Pomodoros
-- User work totals
-- History of completed sessions
-- Authorized resetters per guild
-
-**Backup file** (`timers-data.json.backup`) is created on each save.
-
-## Architecture
-
-The bot is organized into clean, modular components:
-
-- **`index.js`** - Main bot entry point and state management
-- **`storage.js`** - Data persistence with atomic writes
-- **`utils.js`** - Time parsing, formatting, participant parsing
-- **`lib/timer-manager.js`** - Timer lifecycle management
-- **`lib/pomodoro-manager.js`** - Pomodoro session management
-- **`lib/command-handler.js`** - Slash command routing and processing
-
-## Troubleshooting
-
-### Commands not showing up
-
-1. Check that `DISCORD_TOKEN` and `CLIENT_ID` are correct in `.env`
-2. Run `npm run deploy` again
-3. Wait up to 1 hour if deploying globally (not using `GUILD_ID`)
-4. Try restarting Discord
-
-### Bot doesn't respond to commands
-
-1. Make sure bot is logged in: check console for `✅ Bot logged in`
-2. Verify bot has permissions to read/write in the channel
-3. Check that commands were deployed successfully
-
-### Timers not persisting after restart
-
-1. Verify `timers-data.json` exists and is readable
-2. Check bot logs for save errors
-3. Backup file `timers-data.json.backup` is created on each save
-
-### DM notifications not working
-
-1. User must not have DMs disabled from the bot
-2. Bot must have access to send DMs
-3. Enable `allow_dm:true` when starting a timer/pomodoro
-
-## Development
-
-### Project Structure
-
-```
-timerBot/
-├── index.js                    # Main bot file
-├── storage.js                  # Data persistence
-├── utils.js                    # Utility functions
-├── deploy-commands.js          # Command deployment
-├── package.json
-├── .env.example               # Environment template
-├── timers-data.json           # Persistent storage
-├── lib/
-│   ├── timer-manager.js       # Timer management
-│   ├── pomodoro-manager.js    # Pomodoro management
-│   └── command-handler.js     # Command routing
-└── tests/                      # Tests (if any)
-```
-
-### Running Tests
+4. Tests (utility tests):
 
 ```bash
-npm test
+node tests/run-tests.js
 ```
 
-## License
+---
 
-MIT
+## 📝 Troubleshooting & Notes
 
-## Support
+- If the bot lacks channel permissions and `allow_dm` is not set, the bot will refuse to create channel-wide timers/pomodoros or will instruct you to enable `allow_dm` so participants can be notified by DM.
+- Delivery failures are reported to `ADMIN_CHANNEL_ID` when configured, or DM'd to `OWNER_ID`.
+- The bot persists `allowedResetters` per guild; this means authorizations survive restarts.
+- Consider the security of `OWNER_ID` and careful use of `/timer reset` since it clears stored totals and history.
 
-For issues or feature requests, please check the logs and ensure:
+---
 
-1. All environment variables are set correctly
-2. Bot token is valid and not expired
-3. Bot has necessary Discord permissions
-4. Node.js version is 16 or higher
+## Examples
+
+- Start a personal timer: ` /timer start time:10m label:Study`
+- Start a timer for specific users: ` /timer start time:15m participants:@alice @bob`
+- Start a pomodoro with participants and DM notifications: ` /timer pomodoro start work:25m break:5m cycles:4 participants:@alice @bob allow_dm:true label:Focus`
+- Show pomodoro participants (if you're in the session or authorized): ` /timer pomodoro participants`
+- Authorize a user (owner only): ` /timer manage authorize user:@alice`
+- Reset and clear storage (owner or authorized): `/timer reset`
+
+---
+
+## Contributing
+
+Pull requests welcome. Tests are minimal — consider adding unit tests for DM flows and permission edge cases (e.g., reset/manage authorization and owner vs non-owner behavior).
+
+---
+
+License: MIT

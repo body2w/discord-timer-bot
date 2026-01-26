@@ -2,73 +2,55 @@ import fs from "fs/promises";
 import path from "path";
 
 const DATA_FILE = path.resolve(process.cwd(), "timers-data.json");
-const BACKUP_FILE = `${DATA_FILE}.backup`;
+const TEMP_FILE = `${DATA_FILE}.tmp`;
 
 export async function loadState() {
   try {
-    const content = await fs.readFile(DATA_FILE, "utf8");
-    return JSON.parse(content);
+    const raw = await fs.readFile(DATA_FILE, "utf8");
+    const state = JSON.parse(raw);
+    return {
+      timers: state.timers || {},
+      totals: state.totals || {},
+      pomodoros: state.pomodoros || {},
+      history: state.history || [],
+      allowedResetters: state.allowedResetters || {},
+    };
   } catch (err) {
-    if (err.code === "ENOENT") {
-      // File doesn't exist, return default state
+    if (err.code === "ENOENT")
       return {
         timers: {},
-        pomodoros: {},
         totals: {},
+        pomodoros: {},
         history: [],
         allowedResetters: {},
       };
-    }
-
-    // If file exists but is corrupted, try to use backup
-    console.error("Error reading state file:", err);
+    console.error("Failed to load state, backing up and starting fresh:", err);
     try {
-      const backupContent = await fs.readFile(BACKUP_FILE, "utf8");
-      console.log("Using backup state file");
-      return JSON.parse(backupContent);
-    } catch (backupErr) {
-      console.error("Backup file not available, starting fresh");
-      return {
-        timers: {},
-        pomodoros: {},
-        totals: {},
-        history: [],
-        allowedResetters: {},
-      };
+      await fs.copyFile(DATA_FILE, `${DATA_FILE}.bak`);
+    } catch (copyErr) {
+      // ignore
     }
+    return {
+      timers: {},
+      totals: {},
+      pomodoros: {},
+      history: [],
+      allowedResetters: {},
+    };
   }
 }
 
 export async function saveState(state) {
-  try {
-    const data = {
-      timers: state.timers || {},
-      pomodoros: state.pomodoros || {},
-      totals: state.totals || {},
-      history: state.history || [],
-      allowedResetters: state.allowedResetters || {},
-      lastSaved: new Date().toISOString(),
-    };
+  const out = {
+    timers: state.timers || {},
+    totals: state.totals || {},
+    pomodoros: state.pomodoros || {},
+    history: state.history || [],
+    allowedResetters: state.allowedResetters || {},
+    savedAt: new Date().toISOString(),
+  };
 
-    const json = JSON.stringify(data, null, 2);
-
-    // Write to temporary file first
-    const tempFile = `${DATA_FILE}.tmp`;
-    await fs.writeFile(tempFile, json, "utf8");
-
-    // Create backup of existing file
-    try {
-      const existing = await fs.readFile(DATA_FILE, "utf8");
-      await fs.writeFile(BACKUP_FILE, existing, "utf8");
-    } catch (err) {
-      // No existing file to backup
-    }
-
-    // Atomic rename
-    await fs.rename(tempFile, DATA_FILE);
-    console.log("State saved successfully");
-  } catch (err) {
-    console.error("Fatal error saving state:", err);
-    throw err;
-  }
+  const text = JSON.stringify(out, null, 2);
+  await fs.writeFile(TEMP_FILE, text, "utf8");
+  await fs.rename(TEMP_FILE, DATA_FILE);
 }
