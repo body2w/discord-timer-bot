@@ -1,71 +1,99 @@
-export function formatDuration(ms) {
-  const totalSeconds = Math.floor(ms / 1000);
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-  const parts = [];
-  if (hours) parts.push(`${hours}h`);
-  if (minutes) parts.push(`${minutes}m`);
-  if (seconds || parts.length === 0) parts.push(`${seconds}s`);
-  return parts.join(" ");
-}
+/**
+ * Utility functions for parsing and formatting time
+ */
 
 export function parseTime(input) {
   if (!input || typeof input !== "string") return null;
-  input = input.trim();
+  input = input.trim().toLowerCase();
 
   // Support mm:ss (e.g., 1:30) and hh:mm:ss
   if (input.includes(":")) {
-    const parts = input.split(":").map((p) => Number(p));
-    if (parts.some((n) => Number.isNaN(n))) return null;
+    const parts = input.split(":").map((p) => {
+      const num = parseInt(p, 10);
+      return isNaN(num) ? null : num;
+    });
+
+    if (parts.includes(null)) return null;
+
     if (parts.length === 2) {
+      // mm:ss format
       return (parts[0] * 60 + parts[1]) * 1000;
     }
+
     if (parts.length === 3) {
+      // hh:mm:ss format
       return (parts[0] * 3600 + parts[1] * 60 + parts[2]) * 1000;
     }
+
     return null;
   }
 
-  // Support combined units like "1h30m" or "2d 5h" or "90s"
-  const re =
-    /(?:(\d+)\s*d)?\s*(?:(\d+)\s*h)?\s*(?:(\d+)\s*m)?\s*(?:(\d+)\s*s)?/i;
-  const m = input.match(re);
-  if (m && (m[1] || m[2] || m[3] || m[4])) {
-    const days = Number(m[1] || 0);
-    const hours = Number(m[2] || 0);
-    const minutes = Number(m[3] || 0);
-    const seconds = Number(m[4] || 0);
-    return (((days * 24 + hours) * 60 + minutes) * 60 + seconds) * 1000;
+  // Support combined formats like "1h30m", "2d 5h", "90s"
+  const formats = [
+    { pattern: /(\d+)\s*d(?:ays?)?/i, factor: 86400 },
+    { pattern: /(\d+)\s*h(?:ours?)?/i, factor: 3600 },
+    { pattern: /(\d+)\s*m(?:inutes?)?/i, factor: 60 },
+    { pattern: /(\d+)\s*s(?:econds?)?/i, factor: 1 },
+  ];
+
+  let totalSeconds = 0;
+  let found = false;
+
+  for (const { pattern, factor } of formats) {
+    const match = pattern.exec(input);
+    if (match) {
+      totalSeconds += parseInt(match[1], 10) * factor;
+      found = true;
+      input = input.substring(match.index + match[0].length);
+    }
   }
 
-  // Fallback to simple formats like 10s, 5m, 1h, 1d
-  const match = input.match(/^(\d+)(s|m|h|d)$/i);
-  if (!match) return null;
-  const value = Number(match[1]);
-  const unit = match[2].toLowerCase();
-  return unit === "s"
-    ? value * 1000
-    : unit === "m"
-    ? value * 60000
-    : unit === "h"
-    ? value * 3600000
-    : unit === "d"
-    ? value * 86400000
-    : null;
+  return found ? totalSeconds * 1000 : null;
+}
+
+export function formatDuration(ms) {
+  if (ms < 0) ms = 0;
+
+  const totalSeconds = Math.floor(ms / 1000);
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  const parts = [];
+  if (days > 0) parts.push(`${days}d`);
+  if (hours > 0) parts.push(`${hours}h`);
+  if (minutes > 0) parts.push(`${minutes}m`);
+  if (seconds > 0 || parts.length === 0) parts.push(`${seconds}s`);
+
+  return parts.join(" ");
 }
 
 export function parseParticipants(input) {
   if (!input || typeof input !== "string") return [];
+
   const ids = new Set();
-  // Match mention formats: <@123...> or <@!123...>
-  const re = /<@!?(\d+)>/g;
-  let m;
-  while ((m = re.exec(input))) ids.add(m[1]);
-  // Also accept plain IDs separated by spaces/commas
-  const tokens = input.split(/[\s,]+/).map((t) => t.trim());
-  for (const t of tokens) {
-    if (/^\d+$/.test(t)) ids.add(t);
+
+  // Match Discord user mentions: <@userid> or <@!userid>
+  const mentionRegex = /<@!?(\d+)>/g;
+  let match;
+  while ((match = mentionRegex.exec(input))) {
+    ids.add(match[1]);
   }
-  return [...ids];
+
+  // Also match plain user IDs
+  const idRegex = /\b(\d{18,20})\b/g;
+  while ((match = idRegex.exec(input))) {
+    ids.add(match[1]);
+  }
+
+  return Array.from(ids);
+}
+
+export function generateId() {
+  return `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+}
+
+export function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
 }

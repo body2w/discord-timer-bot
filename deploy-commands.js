@@ -1,228 +1,238 @@
 import "dotenv/config";
-import { REST, Routes, SlashCommandBuilder } from "discord.js";
+import { REST, Routes } from "discord.js";
 
-const command = new SlashCommandBuilder()
-  .setName("timer")
-  .setDescription("Ultimate Timer Bot")
-  .addSubcommand((sub) =>
-    sub
-      .setName("start")
-      .setDescription("Start a timer")
-      .addStringOption((opt) =>
-        opt
-          .setName("time")
-          .setDescription("Time format: 10s / 5m / 1h, 1:30, 1h30m")
-          .setRequired(true)
-      )
-      .addStringOption((opt) =>
-        opt
-          .setName("label")
-          .setDescription("Optional label for the timer")
-          .setRequired(false)
-      )
-      .addBooleanOption((opt) =>
-        opt
-          .setName("allow_dm")
-          .setDescription("Allow DM fallback if I can't post in the channel")
-          .setRequired(false)
-      )
-      .addStringOption((opt) =>
-        opt
-          .setName("participants")
-          .setDescription(
-            "Mentions of users to notify for this timer (e.g., @alice @bob)"
-          )
-          .setRequired(false)
-      )
-  )
-  .addSubcommand((sub) =>
-    sub
-      .setName("cancel")
-      .setDescription("Cancel a timer")
-      .addStringOption((opt) =>
-        opt.setName("id").setDescription("Timer ID").setRequired(true)
-      )
-  )
-  .addSubcommand((sub) =>
-    sub.setName("list").setDescription("List your active timers")
-  )
-  .addSubcommand((sub) =>
-    sub
-      .setName("stats")
-      .setDescription("Show total time users have set timers")
-      .addStringOption((opt) =>
-        opt
-          .setName("timeframe")
-          .setDescription("Timeframe to aggregate: all/today/week")
-          .setRequired(false)
-          .addChoices(
-            { name: "all", value: "all" },
-            { name: "today", value: "today" },
-            { name: "week", value: "week" }
-          )
-      )
-      .addBooleanOption((opt) =>
-        opt
-          .setName("global")
-          .setDescription("Show global leaderboard instead of just your total")
-          .setRequired(false)
-      )
-  )
-  .addSubcommand((sub) =>
-    sub
-      .setName("reset")
-      .setDescription("Reset all active timers and pomodoros (owner only)")
-  )
-  .addSubcommand((sub) =>
-    sub
-      .setName("add")
-      .setDescription(
-        "Add a participant to a running timer or pomodoro (provide id to target a specific session)"
-      )
-      .addStringOption((opt) =>
-        opt
-          .setName("id")
-          .setDescription("Timer or pomodoro ID")
-          .setRequired(false)
-      )
-      .addUserOption((opt) =>
-        opt.setName("user").setDescription("User to add").setRequired(true)
-      )
-  )
-  .addSubcommand((sub) =>
-    sub
-      .setName("remove")
-      .setDescription(
-        "Remove a participant from a running timer or pomodoro (provide id to target a specific session)"
-      )
-      .addStringOption((opt) =>
-        opt
-          .setName("id")
-          .setDescription("Timer or pomodoro ID")
-          .setRequired(false)
-      )
-      .addUserOption((opt) =>
-        opt.setName("user").setDescription("User to remove").setRequired(true)
-      )
-  )
-  .addSubcommand((sub) =>
-    sub.setName("help").setDescription("Show usage help for /timer")
-  )
-  .addSubcommandGroup((group) =>
-    group
-      .setName("manage")
-      .setDescription("Owner-only management commands")
-      .addSubcommand((sub) =>
-        sub
-          .setName("authorize")
-          .setDescription("Authorize a user to reset timers in this guild")
-          .addUserOption((opt) =>
-            opt
-              .setName("user")
-              .setDescription("User to authorize")
-              .setRequired(true)
-          )
-      )
-      .addSubcommand((sub) =>
-        sub
-          .setName("revoke")
-          .setDescription("Revoke reset authorization for a user in this guild")
-          .addUserOption((opt) =>
-            opt
-              .setName("user")
-              .setDescription("User to revoke")
-              .setRequired(true)
-          )
-      )
-      .addSubcommand((sub) =>
-        sub
-          .setName("list")
-          .setDescription("List authorized resetters in this guild")
-      )
-  )
-  .addSubcommandGroup((group) =>
-    group
-      .setName("pomodoro")
-      .setDescription("Pomodoro timers (work/break cycles)")
-      .addSubcommand((sub) =>
-        sub
-          .setName("start")
-          .setDescription("Start a pomodoro")
-          .addStringOption((opt) =>
-            opt
-              .setName("work")
-              .setDescription("Work duration (e.g., 25m, 1:30)")
-              .setRequired(false)
-          )
-          .addStringOption((opt) =>
-            opt
-              .setName("break")
-              .setDescription("Break duration (e.g., 5m)")
-              .setRequired(false)
-          )
-          .addIntegerOption((opt) =>
-            opt
-              .setName("cycles")
-              .setDescription("Number of work/break cycles (default 4)")
-              .setRequired(false)
-          )
-          .addStringOption((opt) =>
-            opt
-              .setName("label")
-              .setDescription("Optional label for the pomodoro")
-          )
-          .addBooleanOption((opt) =>
-            opt
-              .setName("allow_dm")
-              .setDescription(
-                "Allow DM fallback if I can't post in the channel"
-              )
-              .setRequired(false)
-          )
-          .addStringOption((opt) =>
-            opt
-              .setName("participants")
-              .setDescription(
-                "Mentions of users participating in work sessions (e.g., @alice @bob)"
-              )
-              .setRequired(false)
-          )
-      )
-      .addSubcommand((sub) =>
-        sub
-          .setName("stop")
-          .setDescription("Stop your active pomodoro (or provide id)")
-          .addStringOption((opt) =>
-            opt
-              .setName("id")
-              .setDescription("Pomodoro ID to stop")
-              .setRequired(false)
-          )
-      )
-      .addSubcommand((sub) =>
-        sub
-          .setName("participants")
-          .setDescription(
-            "Show participants for an active pomodoro (or provide id)"
-          )
-          .addStringOption((opt) =>
-            opt.setName("id").setDescription("Pomodoro ID").setRequired(false)
-          )
-      )
-      .addSubcommand((sub) =>
-        sub.setName("status").setDescription("Show your active pomodoro status")
-      )
-  );
+const token = process.env.TOKEN;
+const clientId = process.env.CLIENT_ID;
+const guildId = process.env.GUILD_ID;
 
-const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
+if (!token || !clientId) {
+  console.error("❌ DISCORD_TOKEN and CLIENT_ID are required in .env file");
+  process.exit(1);
+}
 
-(async () => {
+const rest = new REST({ version: "10" }).setToken(token);
+
+const timerCommands = [
+  {
+    name: "timer",
+    description: "Manage timers",
+    options: [
+      {
+        name: "start",
+        description: "Start a new timer",
+        type: 1,
+        options: [
+          {
+            name: "time",
+            description: "Duration (e.g., 10s, 5m, 1h, 1:30)",
+            type: 3,
+            required: true,
+          },
+          {
+            name: "label",
+            description: "Optional label for the timer",
+            type: 3,
+            required: false,
+          },
+          {
+            name: "participants",
+            description: "Space-separated participant mentions or IDs",
+            type: 3,
+            required: false,
+          },
+          {
+            name: "allow_dm",
+            description: "Allow DM notifications",
+            type: 5,
+            required: false,
+          },
+        ],
+      },
+      {
+        name: "cancel",
+        description: "Cancel a timer",
+        type: 1,
+        options: [
+          {
+            name: "id",
+            description: "Timer ID to cancel",
+            type: 3,
+            required: true,
+          },
+        ],
+      },
+      {
+        name: "list",
+        description: "List your active timers",
+        type: 1,
+      },
+      {
+        name: "stats",
+        description: "View timer statistics",
+        type: 1,
+        options: [
+          {
+            name: "timeframe",
+            description: "Time period (all/today/week)",
+            type: 3,
+            required: false,
+            choices: [
+              { name: "All time", value: "all" },
+              { name: "Today", value: "today" },
+              { name: "This week", value: "week" },
+            ],
+          },
+          {
+            name: "global",
+            description: "Show global leaderboard",
+            type: 5,
+            required: false,
+          },
+        ],
+      },
+      {
+        name: "reset",
+        description: "Reset all timers (owner only)",
+        type: 1,
+      },
+      {
+        name: "authorize",
+        description: "Authorize a user to reset timers (owner only)",
+        type: 1,
+        options: [
+          {
+            name: "user",
+            description: "User to authorize",
+            type: 6,
+            required: true,
+          },
+        ],
+      },
+      {
+        name: "revoke",
+        description: "Revoke authorization (owner only)",
+        type: 1,
+        options: [
+          {
+            name: "user",
+            description: "User to revoke",
+            type: 6,
+            required: true,
+          },
+        ],
+      },
+      {
+        name: "allowedresetters",
+        description: "List authorized resetters (owner only)",
+        type: 1,
+      },
+    ],
+  },
+  {
+    name: "pomodoro",
+    description: "Manage Pomodoro sessions",
+    options: [
+      {
+        name: "start",
+        description: "Start a new Pomodoro session",
+        type: 1,
+        options: [
+          {
+            name: "work",
+            description: "Work duration (e.g., 25m)",
+            type: 3,
+            required: true,
+          },
+          {
+            name: "break",
+            description: "Break duration (e.g., 5m)",
+            type: 3,
+            required: true,
+          },
+          {
+            name: "cycles",
+            description: "Number of cycles (1-100, default 4)",
+            type: 4,
+            required: false,
+          },
+          {
+            name: "label",
+            description: "Optional label for the session",
+            type: 3,
+            required: false,
+          },
+          {
+            name: "participants",
+            description: "Space-separated participant mentions",
+            type: 3,
+            required: false,
+          },
+          {
+            name: "allow_dm",
+            description: "Allow DM notifications",
+            type: 5,
+            required: false,
+          },
+        ],
+      },
+      {
+        name: "stop",
+        description: "Stop your active Pomodoro",
+        type: 1,
+        options: [
+          {
+            name: "id",
+            description: "Pomodoro ID to stop",
+            type: 3,
+            required: true,
+          },
+        ],
+      },
+      {
+        name: "status",
+        description: "Check your active Pomodoro status",
+        type: 1,
+      },
+      {
+        name: "participants",
+        description: "View Pomodoro participants",
+        type: 1,
+        options: [
+          {
+            name: "id",
+            description: "Pomodoro ID",
+            type: 3,
+            required: true,
+          },
+        ],
+      },
+    ],
+  },
+];
+
+async function deployCommands() {
   try {
-    await rest.put(Routes.applicationCommands(process.env.CLIENT_ID), {
-      body: [command.toJSON()],
-    });
-    console.log("✅ Commands registered");
+    console.log("🔄 Deploying commands...");
+
+    let route;
+    if (guildId) {
+      // Deploy to specific guild (faster for testing)
+      route = Routes.applicationGuildCommands(clientId, guildId);
+      console.log(`📍 Deploying to guild: ${guildId}`);
+    } else {
+      // Deploy globally (takes up to 1 hour to propagate)
+      route = Routes.applicationCommands(clientId);
+      console.log(`🌍 Deploying globally (may take up to 1 hour to propagate)`);
+    }
+
+    await rest.put(route, { body: timerCommands });
+
+    console.log("✅ Commands deployed successfully!");
+    console.log(`📊 Deployed ${timerCommands.length} command groups`);
   } catch (err) {
-    console.error(err);
+    console.error("❌ Error deploying commands:", err);
+    process.exit(1);
   }
-})();
+}
+
+deployCommands();
