@@ -1,15 +1,26 @@
 {
   "name": "timer-bot",
-  "version": "1.0.0",
+  "version": "2.0.0",
+  "description": "A clean, reliable Discord timer and Pomodoro bot",
   "main": "index.js",
   "type": "module",
   "scripts": {
     "start": "node index.js",
-    "deploy-commands": "node deploy-commands.js",
-    "test": "node tests/run-tests.js"
+    "deploy": "node deploy-commands.js",
+    "test": "node tests/run-tests.js",
+    "dev": "node index.js"
   },
+  "keywords": [
+    "discord",
+    "timer",
+    "pomodoro",
+    "bot"
+  ],
   "dependencies": {
     "discord.js": "^14.11.0",
     "dotenv": "^17.2.3"
+  },
+  "engines": {
+    "node": ">=16.0.0"
   }
 }
