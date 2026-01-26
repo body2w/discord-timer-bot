@@ -38,7 +38,7 @@ cp .env.example .env
 Edit `.env`:
 
 ```env
-DISCORD_TOKEN=your_token_here
+TOKEN=your_token_here
 CLIENT_ID=your_client_id_here
 GUILD_ID=optional_guild_id_for_faster_testing
 OWNER_ID=your_discord_user_id
